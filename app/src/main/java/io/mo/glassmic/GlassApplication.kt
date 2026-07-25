@@ -9,6 +9,7 @@ import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.runtime.BootGateRepository
 import io.mo.glassmic.data.runtime.SafeModeRepository
 import io.mo.glassmic.log.GlassLog
+import io.mo.glassmic.memory.FairMemoryController
 import io.mo.glassmic.provider.ProviderGate
 import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.service.SafeModeWatchdog
@@ -24,6 +25,7 @@ class GlassApplication : Application() {
     @Inject lateinit var bootGate: BootGateRepository
     @Inject lateinit var watchdog: SafeModeWatchdog
     @Inject lateinit var configStore: ConfigStore
+    @Inject lateinit var fairMemory: FairMemoryController
 
     override fun onCreate() {
         super.onCreate()
@@ -52,6 +54,9 @@ class GlassApplication : Application() {
         bootGate.refreshBootId()
         watchdog.attach()
 
+        // 公平运行内存（ITGSA / HyperOS）：监听系统预警与查杀广播，3 秒内回执
+        fairMemory.initialize()
+
         // 清理遗留的 TTS 临时合成文件：正常随合成结束删除，进程被杀时可能残留。
         // 放后台线程做，避免阻塞启动。
         Thread {
@@ -61,6 +66,17 @@ class GlassApplication : Application() {
         }.start()
 
         GlassLog.b("App") { "GlassMic Application started" }
+    }
+
+    /** 系统标准的内存回收回调，与公平运行内存广播共用同一条回收链路。 */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        fairMemory.onSystemTrim(level)
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        fairMemory.onSystemLowMemory()
     }
 
     // 首次启动按系统语言自动决定默认语言（中文→中文，其余→英文），之后由用户在设置里显式选择。

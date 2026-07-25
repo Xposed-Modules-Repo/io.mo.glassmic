@@ -11,6 +11,8 @@ import io.mo.glassmic.data.runtime.BootGateRepository
 import io.mo.glassmic.data.runtime.HookStatusRepository
 import io.mo.glassmic.data.runtime.SafeModeRepository
 import io.mo.glassmic.log.GlassLog
+import io.mo.glassmic.memory.FairMemoryController
+import io.mo.glassmic.memory.MemoryProbe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -39,7 +41,8 @@ class DiagnosticBundler @Inject constructor(
     private val configStore: ConfigStore,
     private val safeModeRepo: SafeModeRepository,
     private val bootGate: BootGateRepository,
-    private val hookStatusRepo: HookStatusRepository
+    private val hookStatusRepo: HookStatusRepository,
+    private val fairMemory: FairMemoryController
 ) {
 
     suspend fun export(): File = withContext(Dispatchers.IO) {
@@ -52,6 +55,7 @@ class DiagnosticBundler @Inject constructor(
             writeEntry(zip, "log.txt", GlassLog.dump())
             writeEntry(zip, "safe_mode.json", buildSafeMode())
             writeEntry(zip, "hook_status.json", buildHook())
+            writeEntry(zip, "memory.json", buildMemory())
         }
         GlassLog.b("Diag") { "诊断包已生成: ${target.name} size=${target.length()}" }
         target
@@ -109,6 +113,20 @@ class DiagnosticBundler @Inject constructor(
                 put("reason", info.reason.name)
                 put("occurred_at", info.occurredAt)
             }
+        }.toString(2)
+    }
+
+    /** 公平运行内存现场：当前水位 + 最近一次系统通知/回收 + 上次被查杀的记录。 */
+    private fun buildMemory(): String {
+        val s = MemoryProbe.snapshot()
+        return JSONObject().apply {
+            put("pss_kb", s.pssKb)
+            put("java_heap_used_kb", s.heapUsedKb)
+            put("java_heap_max_kb", s.heapMaxKb)
+            put("java_heap_ratio", String.format(Locale.US, "%.2f", s.heapRatio))
+            put("last_notice", fairMemory.lastNotice ?: "")
+            put("last_reclaim", fairMemory.lastReclaim ?: "")
+            put("last_kill_record", fairMemory.lastKillRecord() ?: "")
         }.toString(2)
     }
 

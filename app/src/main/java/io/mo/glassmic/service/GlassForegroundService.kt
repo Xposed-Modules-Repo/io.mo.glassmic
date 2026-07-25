@@ -22,6 +22,7 @@ import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.audio.PlaybackController
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.log.GlassLog
+import io.mo.glassmic.memory.FairMemoryController
 import io.mo.glassmic.provider.ProviderGate
 import kotlinx.coroutines.launch
 import java.io.File
@@ -41,6 +42,7 @@ class GlassForegroundService : LifecycleService() {
 
     @Inject lateinit var runtime: RuntimeStateHolder
     @Inject lateinit var playback: PlaybackController
+    @Inject lateinit var fairMemory: FairMemoryController
 
     override fun onCreate() {
         super.onCreate()
@@ -52,6 +54,8 @@ class GlassForegroundService : LifecycleService() {
         runCatching { File(filesDir, Constants.RUNNING_SENTINEL).createNewFile() }
         startForegroundCompat()
         runtime.setEnabled(true)
+        // 常驻期间才低频采样内存——服务不跑时本进程没有音频缓冲，也就没什么可看的
+        fairMemory.startSampling()
         lifecycleScope.launch {
             if (playback.restorePersistedClip()) {
                 GlassLog.b("FgService") { "restored persisted audio source" }
@@ -74,6 +78,7 @@ class GlassForegroundService : LifecycleService() {
 
     override fun onDestroy() {
         runtime.setEnabled(false)
+        fairMemory.stopSampling()
         // 禁用跨进程 Provider——切断 AMS 强制拉起链路，服务停止后不再被无故复活。
         ProviderGate.disable(this)
         // 清理运行哨兵——表示本次正常退出

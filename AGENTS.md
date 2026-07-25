@@ -46,6 +46,7 @@ Dependency flow: `app` → `core`, `app` → `xposed` → `core`. The `xposed` m
 - **PCM pipe via ContentProvider**: `PcmStreamProvider` serves PCM data; `XposedPcmReader` reads it. Per-consumer sample-rate/channel conversion happens on the hook side.
 - **Dual Xposed API**: Both libxposed API 101 and legacy API 82 are supported. `XposedHookGate.tryMarkAudioHookInstalled()` prevents duplicate hook installation when both entry points fire.
 - **Native AAudio hook**: `glass_aaudio.cpp` uses shadowhook (ByteDance) for inline hooking. Links against NDK's `libaaudio.so`.
+- **公平运行内存 (ITGSA / HyperOS fair memory)**: `app/.../memory/` adapts the ITGSA memory-fairness contract. `FairMemoryController` registers a runtime receiver for `itgsa.intent.action.TRIM` (+ `.KILL`) on a dedicated HandlerThread, releases memory, and replies over the intent's callback binder (`transact(FIRST_CALL_TRANSACTION, …)`, one-way) inside the system's 3s window. `Application.onTrimMemory`/`onLowMemory` feed the same path. Components that hold droppable memory implement `MemoryReleasable` and register with `MemoryPressureBus` themselves (registration, not injection — injecting them would force the whole audio pipeline to be constructed at process start). **The live audio path is never trimmed**: `PlaybackController` keeps the TTS PCM buffer whenever it's the current source or a consumer is attached.
 - **Protobuf Lite**: DataStore uses Proto format. Proto files at `app/src/main/proto/`. Generated Java Lite + Kotlin Lite classes.
 
 ## Critical Constraints

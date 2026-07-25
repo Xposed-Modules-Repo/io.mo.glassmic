@@ -13,6 +13,9 @@ import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.db.AudioDao
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.log.GlassLog
+import io.mo.glassmic.memory.MemoryPressure
+import io.mo.glassmic.memory.MemoryPressureBus
+import io.mo.glassmic.memory.MemoryReleasable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -43,7 +46,12 @@ class PlaybackController @Inject constructor(
     private val runtime: RuntimeStateHolder,
     private val dao: AudioDao,
     private val ttsFactory: TtsSynthesizerFactory
-) {
+) : MemoryReleasable {
+
+    init {
+        // 本类持有整个进程里最大的一块可丢弃内存（TTS 生成的 PCM），登记到内存压力总线
+        MemoryPressureBus.register(this)
+    }
 
     /** 设置某个片段为当前虚拟麦克风音源。文件不存在则自动清掉数据库记录并返回 false。 */
     suspend fun setCurrentClip(clipId: String, startPaused: Boolean = false): Boolean = withContext(Dispatchers.IO) {
@@ -227,5 +235,34 @@ class PlaybackController @Inject constructor(
 
     suspend fun seekTo(positionMs: Long) = withContext(Dispatchers.IO) {
         publisher.seekCurrent(positionMs)
+    }
+
+    // ============ 公平运行内存：可回收内存 ============
+
+    /**
+     * 释放 TTS 生成缓存。
+     *
+     * 48kHz 单声道 PCM16 = 96KB/秒，一段一分钟的语音就是 5.6MB，是本进程最大的一块
+     * 可丢弃内存。丢掉只影响「重复播放上一段语音」，用户重新生成即可恢复。
+     *
+     * 正在合成、或这段 PCM 正是当前音源（目标 App 正在读它）时绝不丢——那会直接打断
+     * 核心功能。正在出声的音频管线在任何压力等级下都不动。
+     */
+    override fun onMemoryPressure(level: MemoryPressure): Long {
+        val pcm = generatedTtsPcm ?: return 0L
+        if (_ttsGen.value == TtsGen.GENERATING) return 0L
+        if (publisher.playingBufferedPcm) return 0L
+        val shouldDrop = when (level) {
+            // 只是切到后台/系统轻度吃紧，用户可能马上回来重播，留着
+            MemoryPressure.LIGHT -> false
+            // 没有 App 在读 PCM 时才丢，避免录音过程中用户点重播落空
+            MemoryPressure.MODERATE -> publisher.consumerCount == 0
+            else -> true
+        }
+        if (!shouldDrop) return 0L
+        generatedTtsPcm = null
+        _ttsGen.value = TtsGen.IDLE
+        GlassLog.b("Playback") { "内存压力($level)：释放 TTS 缓存 ${pcm.size / 1024}KB" }
+        return pcm.size.toLong()
     }
 }

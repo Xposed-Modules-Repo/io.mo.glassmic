@@ -119,6 +119,12 @@ class SharedPcmPublisher @Inject constructor(
 
     val isPaused: Boolean get() = paused
 
+    /** 当前是否有注入进程在读 PCM（有 consumer = 有 App 正在"录音"）。 */
+    val consumerCount: Int get() = consumers.size
+
+    /** 当前音源是否是常驻内存的 PCM（TTS 生成结果）。内存回收时用来判断该缓冲能不能丢。 */
+    val playingBufferedPcm: Boolean get() = currentSource is BufferedPcmSource
+
     /** 暂停只影响"是否从 source 读取数据"，下游仍然收到等量静音，避免 pipe 阻塞/EOF。 */
     fun setPaused(value: Boolean) {
         if (paused == value) return

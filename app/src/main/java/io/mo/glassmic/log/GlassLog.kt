@@ -83,6 +83,32 @@ object GlassLog {
         ring.clear()
         ioExecutor.execute { logFile.get()?.writeText("") }
     }
+
+    /**
+     * 内存吃紧时裁掉环形缓冲，只保留最近 [keep] 条。返回估算释放的字节数。
+     * 日志本身已异步落盘，裁掉的只是内存副本，不丢数据。
+     */
+    fun trimRing(keep: Int): Long {
+        var freed = 0L
+        while (ring.size > keep) {
+            val e = ring.pollFirst() ?: break
+            freed += ENTRY_OVERHEAD_BYTES + (e.message.length + e.tag.length) * 2L
+        }
+        return freed
+    }
+
+    /**
+     * 等待已入队的落盘任务写完（单线程 FIFO，队尾任务跑完即代表前面都写完了）。
+     * 用于查杀广播的现场备份，超时返回 false。
+     */
+    fun flush(timeoutMs: Long): Boolean = runCatching {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        ioExecutor.execute { latch.countDown() }
+        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }.getOrDefault(false)
+
+    /** LogEntry 对象头 + 时间戳 + 引用的粗略开销，只用于日志展示，不追求精确。 */
+    private const val ENTRY_OVERHEAD_BYTES = 64L
 }
 
 data class LogEntry(
