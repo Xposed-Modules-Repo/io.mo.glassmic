@@ -58,4 +58,32 @@ object Constants {
     const val KEY_VISIBILITY_COMPAT = "visibility_compat"
     // 调试/高级用户用的 system property 覆盖（重启失效，仅便于排查）
     const val PROP_VISIBILITY_COMPAT = "persist.sys.glassmic_vis"
+
+    // ============ 音量键快捷操作 ============
+    // 悬浮窗开着时：双击音量上键=播放，双击音量下键=暂停。
+    // 键事件只能在 system_server 的 PhoneWindowManager 里拿到，因此由 Xposed 侧检测、
+    // 广播回 App 侧执行。两侧的"握手"走同一份 remote preferences：
+    //
+    //  - App 写 [KEY_VOLUME_SHORTCUT_ARMED]：= 设置开关打开 && 悬浮窗正在运行。
+    //    只有为 true 时 system_server 侧才会去拦音量键——悬浮窗没开时音量键行为
+    //    与未装模块完全一致，把误伤面压到最小。
+    //  - App 每次 arm 时刷新 [KEY_VOLUME_SHORTCUT_TOKEN]，模块把它带在广播里回传，
+    //    App 侧核对后才执行；防止第三方 App 伪造广播遥控播放。
+    const val KEY_VOLUME_SHORTCUT_ARMED = "volume_shortcut_armed"
+    const val KEY_VOLUME_SHORTCUT_TOKEN = "volume_shortcut_token"
+
+    const val ACTION_VOLUME_SHORTCUT = "io.mo.glassmic.action.VOLUME_SHORTCUT"
+    const val EXTRA_SHORTCUT_ACTION = "shortcut_action"
+    const val EXTRA_SHORTCUT_TOKEN = "shortcut_token"
+    const val SHORTCUT_PLAY = "play"
+    const val SHORTCUT_PAUSE = "pause"
+
+    /**
+     * 双击判定窗口。
+     *
+     * 代价说明：为了做到"双击后音量不变"，第一次按键必须先扣住不放行——只有等这段时间
+     * 内没等到第二次按键，才把音量调整补上。所以 armed 期间单次调音量会晚这么久生效。
+     * 280ms 是"双击不费劲"与"调音量不明显发涩"之间的折中。
+     */
+    const val VOLUME_DOUBLE_TAP_WINDOW_MS = 280L
 }

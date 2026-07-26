@@ -201,28 +201,16 @@ fun SettingsScreen(
                         onChange = vm::setWaveformOpacity
                     )
                 }
+                SwitchRow(
+                    label = stringResource(R.string.settings_volume_shortcut),
+                    hint = stringResource(R.string.settings_volume_shortcut_hint),
+                    checked = cfg.shortcuts.volumeKeysEnabled,
+                    onChange = vm::setVolumeKeysEnabled
+                )
             } }
 
             item { Section(stringResource(R.string.settings_section_policy)) {
                 PlaybackPolicyPicker(cfg.playbackPolicy, vm::setPolicy)
-            } }
-
-            item { Section(stringResource(R.string.settings_section_diag)) {
-                LogLevelPicker(cfg.logging.level, vm::setLogLevel)
-                ActionRow(stringResource(R.string.settings_pipeline_probe),
-                    busy = state.probing,
-                    onClick = vm::runPipelineProbe)
-                state.probeResult?.let { ProbeResultCard(it) }
-                Text(
-                    stringResource(R.string.settings_pipeline_probe_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                ActionRow(stringResource(R.string.settings_export_diag),
-                    busy = state.exporting,
-                    onClick = vm::exportDiagnostic)
-                ActionRow(stringResource(R.string.settings_clear_log), onClick = vm::clearLog)
             } }
 
             item { Section(stringResource(R.string.settings_section_compat)) {
@@ -299,6 +287,24 @@ fun SettingsScreen(
                     },
                     onClick = onOpenAiTts
                 )
+            } }
+
+            item { Section(stringResource(R.string.settings_section_diag)) {
+                LogLevelPicker(cfg.logging.level, vm::setLogLevel)
+                ActionRow(stringResource(R.string.settings_pipeline_probe),
+                    busy = state.probing,
+                    onClick = vm::runPipelineProbe)
+                state.probeResult?.let { ProbeResultCard(it) }
+                Text(
+                    stringResource(R.string.settings_pipeline_probe_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+                ActionRow(stringResource(R.string.settings_export_diag),
+                    busy = state.exporting,
+                    onClick = vm::exportDiagnostic)
+                ActionRow(stringResource(R.string.settings_clear_log), onClick = vm::clearLog)
             } }
 
             item { Section(stringResource(R.string.settings_section_about)) {

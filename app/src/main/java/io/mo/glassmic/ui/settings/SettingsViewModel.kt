@@ -183,6 +183,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // ============ 快捷操作 ============
+    /**
+     * 音量键双击快捷操作。开关只写配置——实际布防由悬浮窗服务在运行期间同步给 Xposed 侧，
+     * 悬浮窗没开时这里打开也不会拦任何按键。
+     */
+    fun setVolumeKeysEnabled(v: Boolean) = viewModelScope.launch {
+        configStore.update { it.setShortcuts(it.shortcuts.toBuilder().setVolumeKeysEnabled(v)) }
+    }
+
     // ============ 默认播放策略 ============
     fun setPolicy(policy: PlaybackPolicy) = viewModelScope.launch {
         configStore.update { it.setPlaybackPolicy(policy) }

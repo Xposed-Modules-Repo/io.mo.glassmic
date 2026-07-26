@@ -55,6 +55,19 @@ class GlassMicXposedModule : XposedModule() {
         }.onFailure {
             log(Log.WARN, TAG, "visibility compat init error: ${it.message}", it)
         }
+
+        // 音量键双击快捷操作。这里**无条件**安装，实际是否拦截由 App 侧写入的「布防」标志
+        // 决定（设置开关打开 && 悬浮窗正在运行）。之所以不像上面那样在安装前判开关：
+        // onSystemServerStarting 是本模块进入 system_server 的唯一时机，若按开关决定装不装，
+        // 用户开启开关后就必须重启设备才生效。未布防时回调只做一次布尔判断即返回，代价可忽略。
+        runCatching {
+            val ok = VolumeKeyHook.install(this, param.classLoader) {
+                runCatching { getRemotePreferences(Constants.REMOTE_PREFS) }.getOrNull()
+            }
+            log(Log.INFO, TAG, "volume key hook installed=$ok")
+        }.onFailure {
+            log(Log.WARN, TAG, "volume key hook init error: ${it.message}", it)
+        }
     }
 
     /**

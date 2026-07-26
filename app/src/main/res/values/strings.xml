@@ -153,6 +153,8 @@
     <string name="settings_waveform_enabled">实时波形显示</string>
     <string name="settings_waveform_enabled_hint">开启后弹出独立的实时波形悬浮窗</string>
     <string name="settings_waveform_opacity">波形透明度</string>
+    <string name="settings_volume_shortcut">音量键快捷操作</string>
+    <string name="settings_volume_shortcut_hint">悬浮窗开启时，双击音量上键播放、双击音量下键暂停。需在 LSPosed 作用域勾选「系统框架」并重启后生效；开启期间单次调音量会延后约 0.3 秒。</string>
 
     <string name="settings_section_policy">默认播放策略</string>
     <string name="settings_policy_hint">片段组未单独设置时使用</string>

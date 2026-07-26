@@ -1,7 +1,9 @@
 package io.mo.glassmic.service
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
@@ -17,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.SourceType
 import io.mo.glassmic.data.audio.FloatingIconStore
 import io.mo.glassmic.data.audio.PlaybackController
@@ -24,6 +27,7 @@ import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.db.AudioDao
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
+import io.mo.glassmic.data.runtime.VolumeShortcutRepository
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.FloatingSize
@@ -31,6 +35,7 @@ import io.mo.glassmic.ui.theme.LocalGlassEnabled
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -52,6 +57,7 @@ class FloatingWindowService : LifecycleService() {
     @Inject lateinit var configStore: ConfigStore
     @Inject lateinit var audioDao: AudioDao
     @Inject lateinit var iconStore: FloatingIconStore
+    @Inject lateinit var volumeShortcut: VolumeShortcutRepository
 
     private var windowManager: WindowManager? = null
     private var host: FloatingOverlayHost? = null
@@ -76,6 +82,13 @@ class FloatingWindowService : LifecycleService() {
         }
         showOverlay()
         runtime.setFloatingVisible(true)
+        // 音量键快捷操作只在悬浮窗存活期间布防，开关变化即时生效
+        lifecycleScope.launch {
+            configStore.flow
+                .map { it.shortcuts.volumeKeysEnabled }
+                .distinctUntilChanged()
+                .collect { applyVolumeShortcut(it) }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -89,6 +102,9 @@ class FloatingWindowService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        // 先撤防再拆窗口：system_server 侧一旦撤防就立刻停止拦截音量键，
+        // 不会留下「悬浮窗已关、音量键却还发涩」的空窗期。
+        applyVolumeShortcut(false)
         host?.let { h ->
             runCatching { windowManager?.removeView(h.view) }
             h.onDestroy()
@@ -96,6 +112,71 @@ class FloatingWindowService : LifecycleService() {
         host = null
         runtime.setFloatingVisible(false)
         super.onDestroy()
+    }
+
+    // ============ 音量键双击快捷操作 ============
+
+    /**
+     * 接收 Xposed 侧（system_server）检测到的双击。
+     *
+     * 必须注册为 EXPORTED 才收得到来自 system_server 的广播，因此用 token 校验来源——
+     * token 由本进程随机生成、写进只有模块读得到的 remote preferences，第三方 App 伪造不出来。
+     */
+    private val shortcutReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != Constants.ACTION_VOLUME_SHORTCUT) return
+            if (!volumeShortcut.verifyToken(intent.getStringExtra(Constants.EXTRA_SHORTCUT_TOKEN))) {
+                GlassLog.b("VolKey") { "丢弃 token 不匹配的快捷操作广播" }
+                return
+            }
+            when (intent.getStringExtra(Constants.EXTRA_SHORTCUT_ACTION)) {
+                Constants.SHORTCUT_PLAY -> onShortcutPlay()
+                Constants.SHORTCUT_PAUSE -> playback.pause()
+            }
+        }
+    }
+
+    private var shortcutArmed = false
+
+    private fun applyVolumeShortcut(enabled: Boolean) {
+        if (enabled == shortcutArmed) return
+        if (enabled) {
+            val filter = IntentFilter(Constants.ACTION_VOLUME_SHORTCUT)
+            val registered = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(shortcutReceiver, filter, Context.RECEIVER_EXPORTED)
+                } else {
+                    @Suppress("UnspecifiedRegisterReceiverFlag")
+                    registerReceiver(shortcutReceiver, filter)
+                }
+            }.onFailure {
+                GlassLog.b("VolKey") { "注册快捷操作接收器失败: ${it.message}" }
+            }.isSuccess
+            if (!registered) return
+            shortcutArmed = true
+            // 先注册后布防：布防之后模块才会开始发广播，不会有收不到的一瞬
+            volumeShortcut.setArmed(true)
+        } else {
+            volumeShortcut.setArmed(false)
+            runCatching { unregisterReceiver(shortcutReceiver) }
+            shortcutArmed = false
+        }
+    }
+
+    /**
+     * 双击音量上键 = 播放。
+     *
+     * 冷启动后还没选过音源时（运行态仍是默认的 REAL_MIC），先把上次持久化的片段装回来，
+     * 否则 resume() 无声可出，用户会以为快捷键没反应。
+     */
+    private fun onShortcutPlay() {
+        lifecycleScope.launch {
+            val src = runtime.flow.value.currentSourceType
+            if (src != SourceType.FILE && src != SourceType.TTS) {
+                playback.restorePersistedClip()
+            }
+            playback.resume()
+        }
     }
 
     private fun showOverlay() {

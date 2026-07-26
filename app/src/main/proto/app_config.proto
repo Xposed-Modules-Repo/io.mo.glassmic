@@ -34,6 +34,16 @@ message AppConfig {
 
   // 文字转语音（TTS → 虚拟麦克风）配置
   TtsConfig tts = 16;
+
+  // 物理按键快捷操作
+  Shortcuts shortcuts = 17;
+}
+
+// 快捷操作：不碰屏幕就能控制虚拟麦克风的播放
+message Shortcuts {
+  // 悬浮窗开启时，双击音量上键=播放、双击音量下键=暂停。
+  // 需要 LSPosed 作用域勾选「系统框架」——按键事件只在 system_server 里拿得到。
+  bool volume_keys_enabled = 1;
 }
 
 // TTS 配置：系统 TTS 参数 + 预留的 AI TTS 接口
