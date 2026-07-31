@@ -154,7 +154,7 @@
     <string name="settings_waveform_enabled_hint">Shows a separate live waveform floating window when enabled</string>
     <string name="settings_waveform_opacity">Waveform Opacity</string>
     <string name="settings_volume_shortcut">Volume Key Shortcuts</string>
-    <string name="settings_volume_shortcut_hint">While the floating window is open, double-press Volume Up to play and Volume Down to pause. Requires "Android System" in the LSPosed scope and a reboot; single volume presses are delayed by ~0.3s while enabled.</string>
+    <string name="settings_volume_shortcut_hint">While the floating window is open, double-press Volume Up to play and Volume Down to pause. Requires "Android System" in the LSPosed scope and a reboot;</string>
 
     <string name="settings_section_policy">Default Playback Policy</string>
     <string name="settings_policy_hint">Used when a clip group has no policy of its own</string>

@@ -16,7 +16,7 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 16
-        versionName = "1.3.4.1"
+        versionName = "1.3.4"
         resourceConfigurations += listOf("zh-rCN", "en")
     }
 
