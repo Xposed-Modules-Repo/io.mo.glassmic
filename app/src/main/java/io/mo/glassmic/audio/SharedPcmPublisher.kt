@@ -78,6 +78,7 @@ class SharedPcmPublisher @Inject constructor(
         const val BYTES_PER_SAMPLE = 2
         const val MASTER_SAMPLE_RATE = 48_000
         const val MASTER_CHANNELS = 1
+        const val FRAME_CHUNK_BYTES = 1920 // 20ms @ 48kHz 单声道 PCM16，切片更细更平滑
         const val NOISE_SIM_AMPLITUDE = 6_000
         const val HIGH_GAIN_MULTIPLIER = 1.8f
         const val REVERB_DELAY_SAMPLES = 2_880   // 60ms @48k 单声道
@@ -153,7 +154,7 @@ class SharedPcmPublisher @Inject constructor(
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
         val queue = Channel<ByteArray>(
-            capacity = 3,
+            capacity = 16,
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
@@ -215,13 +216,16 @@ class SharedPcmPublisher @Inject constructor(
             writerStarted = true
         }
         scope.launch {
-            val frame = ByteBuffer.allocate(4096)
-            // 用时间戳维持实时节奏，避免每帧 delay 累计误差
-            var nextSendAt = System.currentTimeMillis()
+            runCatching {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            }
+            val frame = ByteBuffer.allocate(FRAME_CHUNK_BYTES)
+            // 用纳秒高精度时钟维持实时节奏，避免每帧 delay 累计误差与时钟漂移
+            var nextSendAtNanos = System.nanoTime()
             while (isActive) {
                 if (consumers.isEmpty()) {
                     kotlinx.coroutines.delay(50)
-                    nextSendAt = System.currentTimeMillis()  // 没消费者时重置基准
+                    nextSendAtNanos = System.nanoTime()  // 没消费者时重置基准
                     continue
                 }
                 frame.clear()
@@ -247,22 +251,22 @@ class SharedPcmPublisher @Inject constructor(
                         // 才能让消费端以正常采样率播放时得到正确的变速节奏
                         val outBytes = broadcast(frame)
 
-                        val frameMs = (outBytes.toLong() * 1000L + bytesPerSec - 1) / bytesPerSec
-                        nextSendAt += frameMs
-                        val now = System.currentTimeMillis()
-                        val sleep = nextSendAt - now
-                        if (sleep > 0) {
-                            kotlinx.coroutines.delay(sleep)
-                        } else if (sleep < -200) {
+                        val frameNanos = (outBytes.toLong() * 1_000_000_000L + bytesPerSec - 1) / bytesPerSec
+                        nextSendAtNanos += frameNanos
+                        val nowNanos = System.nanoTime()
+                        val sleepNanos = nextSendAtNanos - nowNanos
+                        if (sleepNanos > 0) {
+                            kotlinx.coroutines.delay(sleepNanos / 1_000_000L)
+                        } else if (sleepNanos < -200_000_000L) {
                             // 落后超过 200ms（被 GC / 系统抢占），追平基准，避免突然爆发
-                            nextSendAt = now
+                            nextSendAtNanos = nowNanos
                         }
                     }
                     n == -1 -> {
                         handleEof()
-                        nextSendAt = System.currentTimeMillis()
+                        nextSendAtNanos = System.nanoTime()
                     }
-                    else -> kotlinx.coroutines.delay(5)
+                    else -> kotlinx.coroutines.delay(2)
                 }
             }
         }

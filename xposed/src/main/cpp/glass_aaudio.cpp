@@ -1,4 +1,5 @@
 #include "glass_aaudio.h"
+#include "glass_ring_buffer.h"
 #include "glass_log.h"
 
 #include <aaudio/AAudio.h>
@@ -9,7 +10,9 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <unistd.h>
+#include <pthread.h>
 
 namespace glass {
 
@@ -24,6 +27,11 @@ struct PcmFdState {
 
 static std::mutex g_fd_mutex;
 static PcmFdState g_fd_state;
+
+// 256KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调
+static SpscRingBuffer<262144> g_ring_buffer;
+static std::atomic<int> g_worker_fd{-1};
+static std::atomic<bool> g_worker_running{false};
 
 static std::atomic<uint64_t> g_pending_reads{0};
 static std::atomic<uint64_t> g_pending_bytes{0};
@@ -50,92 +58,7 @@ static int32_t bytes_per_dst_sample(aaudio_format_t fmt) {
     }
 }
 
-static int32_t map_src_frame(int32_t dst_frame, int32_t src_frames, int32_t dst_frames) {
-    if (src_frames <= 1 || dst_frames <= 1) return 0;
-    int32_t mapped = static_cast<int32_t>(
-        (static_cast<int64_t>(dst_frame) * src_frames) / dst_frames
-    );
-    return mapped >= src_frames ? src_frames - 1 : mapped;
-}
-
-static void convert_and_write(
-    void* dst,
-    aaudio_format_t fmt,
-    int32_t dst_channels,
-    const int16_t* src,
-    int32_t src_frames,
-    int32_t src_channels,
-    int32_t dst_frames
-) {
-    if (!dst || !src || src_frames <= 0 || dst_frames <= 0 || src_channels <= 0 || dst_channels <= 0) {
-        return;
-    }
-
-    switch (fmt) {
-        case AAUDIO_FORMAT_PCM_I16: {
-            auto* d = static_cast<int16_t*>(dst);
-            for (int32_t f = 0; f < dst_frames; ++f) {
-                int32_t si = map_src_frame(f, src_frames, dst_frames);
-                int16_t lv = src[si * src_channels];
-                int16_t rv = src_channels > 1 ? src[si * src_channels + 1] : lv;
-                for (int32_t c = 0; c < dst_channels; ++c) {
-                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
-                }
-            }
-            break;
-        }
-        case AAUDIO_FORMAT_PCM_FLOAT: {
-            auto* d = static_cast<float*>(dst);
-            constexpr float kScale = 1.0f / 32768.0f;
-            for (int32_t f = 0; f < dst_frames; ++f) {
-                int32_t si = map_src_frame(f, src_frames, dst_frames);
-                float lv = src[si * src_channels] * kScale;
-                float rv = src_channels > 1 ? src[si * src_channels + 1] * kScale : lv;
-                for (int32_t c = 0; c < dst_channels; ++c) {
-                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0.0f);
-                }
-            }
-            break;
-        }
-        case AAUDIO_FORMAT_PCM_I32: {
-            auto* d = static_cast<int32_t*>(dst);
-            for (int32_t f = 0; f < dst_frames; ++f) {
-                int32_t si = map_src_frame(f, src_frames, dst_frames);
-                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 16;
-                int32_t rv = src_channels > 1
-                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 16
-                    : lv;
-                for (int32_t c = 0; c < dst_channels; ++c) {
-                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
-                }
-            }
-            break;
-        }
-        case AAUDIO_FORMAT_PCM_I24_PACKED: {
-            auto* d = static_cast<uint8_t*>(dst);
-            for (int32_t f = 0; f < dst_frames; ++f) {
-                int32_t si = map_src_frame(f, src_frames, dst_frames);
-                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 8;
-                int32_t rv = src_channels > 1
-                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 8
-                    : lv;
-                for (int32_t c = 0; c < dst_channels; ++c) {
-                    int32_t v = c == 0 ? lv : (c == 1 ? rv : 0);
-                    *d++ = static_cast<uint8_t>(v & 0xFF);
-                    *d++ = static_cast<uint8_t>((v >> 8) & 0xFF);
-                    *d++ = static_cast<uint8_t>((v >> 16) & 0xFF);
-                }
-            }
-            break;
-        }
-        default:
-            std::memset(dst, 0, static_cast<size_t>(dst_frames) * dst_channels * bytes_per_dst_sample(fmt));
-            break;
-    }
-}
-
 // 舒适噪声幅度：±8 LSB ≈ -72 dBFS，人耳不可闻，但足以让下游 App 的 VAD 判定"有信号"。
-// 与 Kotlin 侧 io.mo.glassmic.core.audio.ComfortNoise / app 侧 ComfortNoiseSource 保持一致。
 static constexpr int32_t kComfortAmplitude = 8;
 
 // 轻量 xorshift32，仅用于生成极低电平噪声，无需密码学质量。每线程独立种子。
@@ -146,9 +69,7 @@ static inline int32_t next_comfort_sample() {
     return static_cast<int32_t>(s % (2u * kComfortAmplitude + 1u)) - kComfortAmplitude;
 }
 
-// 用舒适噪声填满输入缓冲，替代纯 0 静音——纯数字 0 是"死麦"特征，
-// 微信等录音端持续读到全 0 会判"无音频输入/麦克风被占用"而中断录音。
-// 按各 PCM 格式把 16bit 域的低电平样本换算写入（换算方式与 convert_and_write 一致）。
+// 用舒适噪声填满输入缓冲，替代纯 0 静音
 static void fill_comfort_noise(
     void* buffer, aaudio_format_t fmt, int32_t channels, int32_t numFrames
 ) {
@@ -187,20 +108,172 @@ static void fill_comfort_noise(
     }
 }
 
-static int read_full(int fd, uint8_t* buf, int n) {
-    int got = 0;
-    while (got < n) {
-        ssize_t r = ::read(fd, buf + got, n - got);
-        if (r > 0) {
-            got += static_cast<int>(r);
-        } else if (r == 0) {
+/**
+ * 转换 PCM 并写入目标 buffer：
+ * 采用基于真实采样率映射的时间对齐算法，不足部分填充舒适噪声，绝不发生音频时间拉伸变调。
+ */
+static void convert_and_write(
+    void* dst,
+    aaudio_format_t fmt,
+    int32_t dst_channels,
+    int32_t dst_sample_rate,
+    const int16_t* src,
+    int32_t src_frames,
+    int32_t src_channels,
+    int32_t src_sample_rate,
+    int32_t dst_frames
+) {
+    if (!dst || dst_frames <= 0 || dst_channels <= 0) return;
+
+    // 计算实际可转换的有效目标帧数
+    int32_t valid_dst_frames = 0;
+    if (src && src_frames > 0 && src_channels > 0 && src_sample_rate > 0 && dst_sample_rate > 0) {
+        valid_dst_frames = static_cast<int32_t>(
+            (static_cast<int64_t>(src_frames) * dst_sample_rate) / src_sample_rate
+        );
+        if (valid_dst_frames > dst_frames) valid_dst_frames = dst_frames;
+    }
+
+    constexpr float kFloatScale = 1.0f / 32768.0f;
+
+    switch (fmt) {
+        case AAUDIO_FORMAT_PCM_I16: {
+            auto* d = static_cast<int16_t*>(dst);
+            for (int32_t f = 0; f < valid_dst_frames; ++f) {
+                int32_t si = static_cast<int32_t>(
+                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
+                );
+                if (si >= src_frames) si = src_frames - 1;
+                int16_t lv = src[si * src_channels];
+                int16_t rv = src_channels > 1 ? src[si * src_channels + 1] : lv;
+                for (int32_t c = 0; c < dst_channels; ++c) {
+                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
+                }
+            }
+            // 欠载不足部分填充舒适噪声，不拉伸
+            for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
+                int16_t noise = static_cast<int16_t>(next_comfort_sample());
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+            }
             break;
+        }
+        case AAUDIO_FORMAT_PCM_FLOAT: {
+            auto* d = static_cast<float*>(dst);
+            for (int32_t f = 0; f < valid_dst_frames; ++f) {
+                int32_t si = static_cast<int32_t>(
+                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
+                );
+                if (si >= src_frames) si = src_frames - 1;
+                float lv = src[si * src_channels] * kFloatScale;
+                float rv = src_channels > 1 ? src[si * src_channels + 1] * kFloatScale : lv;
+                for (int32_t c = 0; c < dst_channels; ++c) {
+                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0.0f);
+                }
+            }
+            for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
+                float noise = next_comfort_sample() * kFloatScale;
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+            }
+            break;
+        }
+        case AAUDIO_FORMAT_PCM_I32: {
+            auto* d = static_cast<int32_t*>(dst);
+            for (int32_t f = 0; f < valid_dst_frames; ++f) {
+                int32_t si = static_cast<int32_t>(
+                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
+                );
+                if (si >= src_frames) si = src_frames - 1;
+                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 16;
+                int32_t rv = src_channels > 1
+                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 16
+                    : lv;
+                for (int32_t c = 0; c < dst_channels; ++c) {
+                    *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
+                }
+            }
+            for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
+                int32_t noise = next_comfort_sample() << 16;
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+            }
+            break;
+        }
+        case AAUDIO_FORMAT_PCM_I24_PACKED: {
+            auto* d = static_cast<uint8_t*>(dst);
+            for (int32_t f = 0; f < valid_dst_frames; ++f) {
+                int32_t si = static_cast<int32_t>(
+                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
+                );
+                if (si >= src_frames) si = src_frames - 1;
+                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 8;
+                int32_t rv = src_channels > 1
+                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 8
+                    : lv;
+                for (int32_t c = 0; c < dst_channels; ++c) {
+                    int32_t v = c == 0 ? lv : (c == 1 ? rv : 0);
+                    *d++ = static_cast<uint8_t>(v & 0xFF);
+                    *d++ = static_cast<uint8_t>((v >> 8) & 0xFF);
+                    *d++ = static_cast<uint8_t>((v >> 16) & 0xFF);
+                }
+            }
+            for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
+                int32_t v = next_comfort_sample() << 8;
+                for (int32_t c = 0; c < dst_channels; ++c) {
+                    *d++ = static_cast<uint8_t>(v & 0xFF);
+                    *d++ = static_cast<uint8_t>((v >> 8) & 0xFF);
+                    *d++ = static_cast<uint8_t>((v >> 16) & 0xFF);
+                }
+            }
+            break;
+        }
+        default:
+            std::memset(dst, 0, static_cast<size_t>(dst_frames) * dst_channels * bytes_per_dst_sample(fmt));
+            break;
+    }
+}
+
+// 后台异步管道读取循环
+static void pcm_reader_worker_loop() {
+    pthread_setname_np(pthread_self(), "GlassPcmWorker");
+    uint8_t chunk[4096];
+    while (g_worker_running.load(std::memory_order_relaxed)) {
+        int fd = g_worker_fd.load(std::memory_order_acquire);
+        if (fd < 0) {
+            usleep(20000); // 20ms
+            continue;
+        }
+
+        // 环形缓冲已满时短暂让出 CPU
+        if (g_ring_buffer.available_write() < sizeof(chunk)) {
+            usleep(5000); // 5ms
+            continue;
+        }
+
+        ssize_t r = ::read(fd, chunk, sizeof(chunk));
+        if (r > 0) {
+            size_t written = 0;
+            while (written < static_cast<size_t>(r) && g_worker_running.load(std::memory_order_relaxed)) {
+                size_t n = g_ring_buffer.write(chunk + written, static_cast<size_t>(r) - written);
+                written += n;
+                if (written < static_cast<size_t>(r)) {
+                    usleep(1000); // 1ms
+                }
+            }
+        } else if (r == 0) {
+            // EOF: 生产者暂停或关闭
+            usleep(10000);
         } else {
             if (errno == EINTR) continue;
-            return got > 0 ? got : -1;
+            usleep(10000);
         }
     }
-    return got;
+}
+
+static void ensure_worker_started() {
+    bool expected = false;
+    if (g_worker_running.compare_exchange_strong(expected, true)) {
+        std::thread t(pcm_reader_worker_loop);
+        t.detach();
+    }
 }
 
 /**
@@ -208,16 +281,10 @@ static int read_full(int fd, uint8_t* buf, int n) {
  *
  * 返回值：
  *   FillResult::FILLED   —— buffer 已被虚拟数据覆盖
- *   FillResult::PASS     —— 当前应放行真实麦克风（REAL_MIC，或 FILE 但暂无可读数据）
- *
- * 同时累计劫持统计。read() 路径与 data-callback 路径共用本函数。
+ *   FillResult::PASS     —— 当前应放行真实麦克风（REAL_MIC）
  */
 enum class FillResult { FILLED, PASS };
 
-/**
- * 不依赖 AAudioStream 的底层填充：把虚拟音源按给定 PCM 格式写进 buffer。
- * AAudio（read / data-callback）与 OpenSL ES 两条路径共用本函数。
- */
 static FillResult fill_pcm_impl(
     void* buffer,
     aaudio_format_t dst_fmt,
@@ -233,8 +300,6 @@ static FillResult fill_pcm_impl(
     if (dst_sample_rate <= 0) dst_sample_rate = 48'000;
 
     if (decision == Decision::SILENCE) {
-        // 填舒适噪声而非纯 0：与 Java AudioRecordHook 的 SILENCE 分支一致，
-        // 避免微信等把持续全 0 判为"无输入/麦克风被占用"而中断录音。
         fill_comfort_noise(buffer, dst_fmt, dst_channels, numFrames);
         g_pending_reads.fetch_add(1, std::memory_order_relaxed);
         g_pending_bytes.fetch_add(static_cast<uint64_t>(numFrames) * dst_channels * 2, std::memory_order_relaxed);
@@ -243,38 +308,45 @@ static FillResult fill_pcm_impl(
         return FillResult::FILLED;
     }
 
-    // decision == FILE
-    int fd = -1;
+    // decision == FILE: 从 Lock-Free RingBuffer 零阻塞读取
     int32_t src_channels = 1;
     int32_t src_sample_rate = 48'000;
     {
         std::lock_guard<std::mutex> lock(g_fd_mutex);
-        fd = g_fd_state.fd;
         src_channels = g_fd_state.channels > 0 ? g_fd_state.channels : 1;
         src_sample_rate = g_fd_state.sample_rate > 0 ? g_fd_state.sample_rate : 48'000;
     }
-    if (fd < 0) return FillResult::PASS;
 
     int32_t need_src_frames = static_cast<int32_t>(
         (static_cast<int64_t>(numFrames) * src_sample_rate + dst_sample_rate - 1) / dst_sample_rate
     );
     if (need_src_frames <= 0) need_src_frames = numFrames;
 
-    int need_bytes = need_src_frames * src_channels * 2;
-    if (need_bytes > 32 * 1024) return FillResult::PASS;
+    size_t need_bytes = static_cast<size_t>(need_src_frames * src_channels * 2);
+    if (need_bytes > 32 * 1024) need_bytes = 32 * 1024;
 
     uint8_t tmp[32 * 1024];
-    int got = read_full(fd, tmp, need_bytes);
-    if (got <= 0) return FillResult::PASS;
+    size_t got = g_ring_buffer.read(tmp, need_bytes);
 
-    int got_frames = got / (src_channels * 2);
+    if (got == 0) {
+        // 短暂欠载（Pipe 延迟到达）：填充舒适噪声，不回退真麦，保持流平稳
+        fill_comfort_noise(buffer, dst_fmt, dst_channels, numFrames);
+        g_pending_reads.fetch_add(1, std::memory_order_relaxed);
+        g_last_sr.store(dst_sample_rate, std::memory_order_relaxed);
+        g_last_ch.store(dst_channels, std::memory_order_relaxed);
+        return FillResult::FILLED;
+    }
+
+    int32_t got_frames = static_cast<int32_t>(got / (src_channels * 2));
     convert_and_write(
         buffer,
         dst_fmt,
         dst_channels,
+        dst_sample_rate,
         reinterpret_cast<int16_t*>(tmp),
         got_frames,
         src_channels,
+        src_sample_rate,
         numFrames
     );
 
@@ -295,7 +367,7 @@ static FillResult fill_input_buffer(AAudioStream* stream, void* buffer, int32_t 
     return fill_pcm_impl(buffer, fmt, ch, sr, numFrames);
 }
 
-// 导出给 OpenSL ES 路径用（见 glass_aaudio.h）。
+// 导出给 OpenSL ES / AudioRecord 路径用
 bool fill_pcm(void* buffer, SampleFmt sf, int32_t channels, int32_t sample_rate, int32_t frames) {
     aaudio_format_t fmt = (sf == SampleFmt::FLOAT)
         ? AAUDIO_FORMAT_PCM_FLOAT
@@ -326,11 +398,6 @@ static aaudio_result_t my_AAudioStream_read(
 }
 
 // =================== data-callback 路径 ===================
-//
-// 抖音等使用 AAudio 的回调采集模式（AAudioStreamBuilder_setDataCallback +
-// LOW_LATENCY）。回调模式下数据由框架回调线程直接送进 app 的 callback，
-// 完全不经过 AAudioStream_read。我们 hook setDataCallback，把 app 的 callback
-// 包进 trampoline：在转交给 app 之前，把输入缓冲覆盖成虚拟音源。
 
 struct CbWrapper {
     AAudioStream_dataCallback orig_cb;
@@ -345,7 +412,6 @@ static aaudio_data_callback_result_t my_data_callback(
 ) {
     auto* w = static_cast<CbWrapper*>(userData);
 
-    // 仅对输入流改写；输出流（播放）原样转交。
     if (stream && audioData && numFrames > 0 &&
         AAudioStream_getDirection(stream) == AAUDIO_DIRECTION_INPUT) {
         fill_input_buffer(stream, audioData, numFrames);
@@ -362,16 +428,11 @@ static void my_setDataCallback(
     AAudioStream_dataCallback callback,
     void* userData
 ) {
-    // app 传 nullptr 表示改用阻塞 read 模式——必须原样转交，否则会被我们
-    // 误转成 callback 模式。
     if (callback == nullptr) {
         g_orig_setDataCallback(builder, nullptr, userData);
         return;
     }
 
-    // 每个录音会话分配一个 wrapper。wrapper 与 stream 生命周期绑定，但 AAudio
-    // 不暴露释放时机，这里故意不回收——每个流仅泄漏 sizeof(CbWrapper) 字节，
-    // 现实中录音流数量极少，可忽略；换取回调线程零锁、零竞争。
     auto* w = new CbWrapper{callback, userData};
     g_orig_setDataCallback(builder, &my_data_callback, w);
 }
@@ -397,7 +458,6 @@ bool install_aaudio_hook() {
     }
     LOGI("AAudioStream_read hook installed");
 
-    // data-callback 路径——失败不致命，阻塞 read 路径仍可用。
     g_setcb_hook_stub = shadowhook_hook_sym_name(
         "libaaudio.so",
         "AAudioStreamBuilder_setDataCallback",
@@ -412,6 +472,7 @@ bool install_aaudio_hook() {
         LOGI("AAudioStreamBuilder_setDataCallback hook installed");
     }
 
+    ensure_worker_started();
     return true;
 }
 
@@ -433,10 +494,14 @@ void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels) {
         g_fd_state.channels = channels > 0 ? channels : 1;
     }
 
+    g_ring_buffer.clear();
+    g_worker_fd.store(fd, std::memory_order_release);
+
     if (old_fd >= 0 && old_fd != fd) {
         ::close(old_fd);
     }
-    LOGI("set_pcm_fd fd=%d sr=%d ch=%d", fd, sample_rate, channels);
+    ensure_worker_started();
+    LOGI("set_pcm_fd fd=%d sr=%d ch=%d (ring buffer cleared)", fd, sample_rate, channels);
 }
 
 void drain_stats(
