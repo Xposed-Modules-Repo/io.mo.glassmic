@@ -15,6 +15,7 @@ data class RuntimeState(
     val paused: Boolean = false,
     val playbackPolicy: PlaybackPolicy = PlaybackPolicy.LOOP,
     val floatingWindowVisible: Boolean = false,
+    val isStreaming: Boolean = false,
     val lastError: String? = null
 )
 

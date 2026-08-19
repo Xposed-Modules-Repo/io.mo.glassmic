@@ -14,11 +14,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import io.mo.glassmic.R
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.SourceType
 import io.mo.glassmic.data.audio.FloatingIconStore
@@ -217,11 +219,13 @@ class FloatingWindowService : LifecycleService() {
                 val allClips by audioDao.observeAllClips().collectAsState(initial = emptyList())
                 val mode by modeFlow.collectAsState()
                 val ttsGen by playback.ttsGen.collectAsState()
+                val ttsPreviewing by playback.ttsPreviewing.collectAsState()
                 val ttsDelayRemainingMs by playback.ttsDelayRemainingMs.collectAsState()
 
-                val activeFile = rt.currentSourceType == SourceType.FILE && rt.enabled && !rt.safeMode
+                val activeFile = (rt.currentSourceType == SourceType.FILE || rt.currentSourceType == SourceType.TTS) && rt.enabled && !rt.safeMode
                 val currentId = cfg.currentAudioId
-                val currentName = allClips.firstOrNull { it.id == currentId }?.displayName
+                val currentName = if (rt.currentSourceType == SourceType.TTS) stringResource(R.string.source_tts)
+                                  else allClips.firstOrNull { it.id == currentId }?.displayName
 
                 // 悬浮窗不走 GlassMicTheme，这两个外观开关得在这里手动注入
                 CompositionLocalProvider(
@@ -232,6 +236,9 @@ class FloatingWindowService : LifecycleService() {
                     mode = mode,
                     activeFile = activeFile,
                     paused = rt.paused,
+                    isStreaming = rt.isStreaming,
+                    audioMonitorEnabled = cfg.audioMonitor.enabled,
+                    onToggleAudioMonitor = ::toggleAudioMonitor,
                     positionMs = rt.positionMs,
                     durationMs = rt.durationMs,
                     currentName = currentName,
@@ -255,7 +262,9 @@ class FloatingWindowService : LifecycleService() {
                     ttsGenerating = ttsGen == PlaybackController.TtsGen.GENERATING,
                     ttsReady = ttsGen == PlaybackController.TtsGen.READY,
                     ttsFailed = ttsGen == PlaybackController.TtsGen.FAILED,
+                    ttsPreviewing = ttsPreviewing,
                     onGenerateTts = { text -> onGenerateTts(text) },
+                    onTogglePreviewTts = { onTogglePreviewTts() },
                     onPlayTts = { onPlayTts() },
                     ttsProgressBarEnabled = cfg.tts.progressBarEnabled,
                     ttsActive = rt.currentSourceType == SourceType.TTS,
@@ -280,6 +289,21 @@ class FloatingWindowService : LifecycleService() {
     // ============ 手势 / 交互回调 ============
     private fun onBallTap(activeFile: Boolean) {
         setMode(if (activeFile) FloatMode.MINI_BAR else FloatMode.MENU)
+    }
+
+    private fun toggleAudioMonitor() {
+        lifecycleScope.launch {
+            configStore.update {
+                val cur = it.audioMonitor
+                it.setAudioMonitor(cur.toBuilder().setEnabled(!cur.enabled).build())
+            }
+        }
+    }
+
+    private fun onTogglePreviewTts() {
+        lifecycleScope.launch {
+            playback.togglePreviewTts()
+        }
     }
 
     private fun onSelectClip(clipId: String) {

@@ -228,9 +228,9 @@ private fun StatusHeroCard(
                 )
                 Text(
                     "${formatMs(state.positionMs)} / ${formatMs(state.durationMs)}" +
-                        if (state.paused) "  ·  已暂停" else "",
+                        if (state.paused) "  ·  已暂停" else if (state.isStreaming) "  ·  ● 推流录制中" else "",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    color = if (state.isStreaming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
         }

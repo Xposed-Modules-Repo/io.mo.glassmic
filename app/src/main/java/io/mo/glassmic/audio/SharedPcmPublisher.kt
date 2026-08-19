@@ -44,7 +44,8 @@ class SharedPcmPublisher @Inject constructor(
     @ApplicationContext private val context: Context,
     private val runtime: RuntimeStateHolder,
     private val configStore: ConfigStore,
-    private val watchdog: SafeModeWatchdog
+    private val watchdog: SafeModeWatchdog,
+    private val monitorPlayer: AudioMonitorPlayer
 ) {
 
     private data class Consumer(
@@ -114,6 +115,10 @@ class SharedPcmPublisher @Inject constructor(
                     speed = exp.unlocked && exp.speedEnabled && speedRaw != 1f,
                     speedFactor = speedRaw
                 )
+                val mon = cfg.audioMonitor
+                monitorPlayer.setEnabled(mon.enabled)
+                val monVol = if (mon.volume <= 0f) 1.0f else mon.volume.coerceIn(0f, 1f)
+                monitorPlayer.setVolume(monVol)
             }
         }
     }
@@ -130,7 +135,11 @@ class SharedPcmPublisher @Inject constructor(
     fun setPaused(value: Boolean) {
         if (paused == value) return
         paused = value
+        if (value) {
+            monitorPlayer.pauseAndFlush()
+        }
         runtime.setPaused(value)
+        runtime.setStreaming(if (value) false else consumers.isNotEmpty())
         GlassLog.b("Publisher") { "paused=$value" }
     }
 
@@ -194,6 +203,7 @@ class SharedPcmPublisher @Inject constructor(
         groupId: String? = null,
         audioId: String? = null
     ) {
+        monitorPlayer.pauseAndFlush()
         currentSource.release()
         currentSource = src
         if (updateRuntime) {
@@ -224,10 +234,13 @@ class SharedPcmPublisher @Inject constructor(
             var nextSendAtNanos = System.nanoTime()
             while (isActive) {
                 if (consumers.isEmpty()) {
+                    runtime.setStreaming(false)
+                    monitorPlayer.pauseAndFlush()
                     kotlinx.coroutines.delay(50)
                     nextSendAtNanos = System.nanoTime()  // 没消费者时重置基准
                     continue
                 }
+                runtime.setStreaming(!paused)
                 frame.clear()
                 val sr = MASTER_SAMPLE_RATE
                 val ch = MASTER_CHANNELS
@@ -263,10 +276,14 @@ class SharedPcmPublisher @Inject constructor(
                         }
                     }
                     n == -1 -> {
+                        monitorPlayer.pauseAndFlush()
                         handleEof()
                         nextSendAtNanos = System.nanoTime()
                     }
-                    else -> kotlinx.coroutines.delay(2)
+                    else -> {
+                        monitorPlayer.pauseAndFlush()
+                        kotlinx.coroutines.delay(2)
+                    }
                 }
             }
         }
@@ -290,10 +307,15 @@ class SharedPcmPublisher @Inject constructor(
     private fun broadcast(buf: ByteBuffer): Int {
         val data = ByteArray(buf.remaining())
         buf.get(data)
-        val sourceData = if (!paused && currentSource.type == SourceType.FILE) {
+        val sourceData = if (!paused && (currentSource.type == SourceType.FILE || currentSource.type == SourceType.TTS)) {
             applyEffects(data)
         } else {
             data
+        }
+        if (!paused && (currentSource.type == SourceType.FILE || currentSource.type == SourceType.TTS)) {
+            monitorPlayer.write(sourceData)
+        } else {
+            monitorPlayer.pauseAndFlush()
         }
         consumers.values.forEach { c ->
             val payload = c.converter.convert(sourceData)

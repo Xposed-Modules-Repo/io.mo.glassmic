@@ -37,6 +37,15 @@ message AppConfig {
 
   // 物理按键快捷操作
   Shortcuts shortcuts = 17;
+
+  // 实时耳返 / 音频监听配置
+  AudioMonitor audio_monitor = 18;
+}
+
+// 实时耳返 / 本地监听播放：在虚拟麦克风推流时，同步通过扬声器/耳机输出声音
+message AudioMonitor {
+  bool enabled = 1;      // 是否开启实时监听/耳返
+  float volume = 2;      // 监听音量 0.0 - 1.0，0 视为 1.0
 }
 
 // 快捷操作：不碰屏幕就能控制虚拟麦克风的播放
