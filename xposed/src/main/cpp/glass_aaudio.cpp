@@ -108,9 +108,22 @@ static void fill_comfort_noise(
     }
 }
 
+static inline float soft_limit_f(float sample) {
+    constexpr float threshold = 30000.0f;
+    constexpr float max_val = 32767.0f;
+    float abs_val = sample < 0.0f ? -sample : sample;
+    if (abs_val <= threshold) return sample;
+    float over = abs_val - threshold;
+    float range = max_val - threshold;
+    float norm = over / range;
+    float soft = (norm / (1.0f + norm)) * range;
+    float res = threshold + soft;
+    return sample < 0.0f ? -res : res;
+}
+
 /**
  * 转换 PCM 并写入目标 buffer：
- * 采用基于真实采样率映射的时间对齐算法，不足部分填充舒适噪声，绝不发生音频时间拉伸变调。
+ * 采用基于真实采样率映射的时间对齐与线性插值算法，不足部分填充舒适噪声，绝不发生音频时间拉伸变调。
  */
 static void convert_and_write(
     void* dst,
@@ -140,12 +153,22 @@ static void convert_and_write(
         case AAUDIO_FORMAT_PCM_I16: {
             auto* d = static_cast<int16_t*>(dst);
             for (int32_t f = 0; f < valid_dst_frames; ++f) {
-                int32_t si = static_cast<int32_t>(
-                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
-                );
-                if (si >= src_frames) si = src_frames - 1;
-                int16_t lv = src[si * src_channels];
-                int16_t rv = src_channels > 1 ? src[si * src_channels + 1] : lv;
+                double src_pos = (static_cast<double>(f) * src_sample_rate) / dst_sample_rate;
+                int32_t i0 = static_cast<int32_t>(src_pos);
+                float frac = static_cast<float>(src_pos - i0);
+                if (i0 >= src_frames) i0 = src_frames - 1;
+                int32_t i1 = (i0 + 1 < src_frames) ? i0 + 1 : i0;
+
+                float lv0 = static_cast<float>(src[i0 * src_channels]);
+                float lv1 = static_cast<float>(src[i1 * src_channels]);
+                int16_t lv = static_cast<int16_t>(soft_limit_f(lv0 + (lv1 - lv0) * frac));
+
+                int16_t rv = lv;
+                if (src_channels > 1) {
+                    float rv0 = static_cast<float>(src[i0 * src_channels + 1]);
+                    float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
+                    rv = static_cast<int16_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac));
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
                 }
@@ -160,12 +183,22 @@ static void convert_and_write(
         case AAUDIO_FORMAT_PCM_FLOAT: {
             auto* d = static_cast<float*>(dst);
             for (int32_t f = 0; f < valid_dst_frames; ++f) {
-                int32_t si = static_cast<int32_t>(
-                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
-                );
-                if (si >= src_frames) si = src_frames - 1;
-                float lv = src[si * src_channels] * kFloatScale;
-                float rv = src_channels > 1 ? src[si * src_channels + 1] * kFloatScale : lv;
+                double src_pos = (static_cast<double>(f) * src_sample_rate) / dst_sample_rate;
+                int32_t i0 = static_cast<int32_t>(src_pos);
+                float frac = static_cast<float>(src_pos - i0);
+                if (i0 >= src_frames) i0 = src_frames - 1;
+                int32_t i1 = (i0 + 1 < src_frames) ? i0 + 1 : i0;
+
+                float lv0 = static_cast<float>(src[i0 * src_channels]);
+                float lv1 = static_cast<float>(src[i1 * src_channels]);
+                float lv = (lv0 + (lv1 - lv0) * frac) * kFloatScale;
+
+                float rv = lv;
+                if (src_channels > 1) {
+                    float rv0 = static_cast<float>(src[i0 * src_channels + 1]);
+                    float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
+                    rv = (rv0 + (rv1 - rv0) * frac) * kFloatScale;
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0.0f);
                 }
@@ -179,14 +212,22 @@ static void convert_and_write(
         case AAUDIO_FORMAT_PCM_I32: {
             auto* d = static_cast<int32_t*>(dst);
             for (int32_t f = 0; f < valid_dst_frames; ++f) {
-                int32_t si = static_cast<int32_t>(
-                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
-                );
-                if (si >= src_frames) si = src_frames - 1;
-                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 16;
-                int32_t rv = src_channels > 1
-                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 16
-                    : lv;
+                double src_pos = (static_cast<double>(f) * src_sample_rate) / dst_sample_rate;
+                int32_t i0 = static_cast<int32_t>(src_pos);
+                float frac = static_cast<float>(src_pos - i0);
+                if (i0 >= src_frames) i0 = src_frames - 1;
+                int32_t i1 = (i0 + 1 < src_frames) ? i0 + 1 : i0;
+
+                float lv0 = static_cast<float>(src[i0 * src_channels]);
+                float lv1 = static_cast<float>(src[i1 * src_channels]);
+                int32_t lv = static_cast<int32_t>(soft_limit_f(lv0 + (lv1 - lv0) * frac)) << 16;
+
+                int32_t rv = lv;
+                if (src_channels > 1) {
+                    float rv0 = static_cast<float>(src[i0 * src_channels + 1]);
+                    float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
+                    rv = static_cast<int32_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac)) << 16;
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
                 }
@@ -200,14 +241,22 @@ static void convert_and_write(
         case AAUDIO_FORMAT_PCM_I24_PACKED: {
             auto* d = static_cast<uint8_t*>(dst);
             for (int32_t f = 0; f < valid_dst_frames; ++f) {
-                int32_t si = static_cast<int32_t>(
-                    (static_cast<int64_t>(f) * src_sample_rate) / dst_sample_rate
-                );
-                if (si >= src_frames) si = src_frames - 1;
-                int32_t lv = static_cast<int32_t>(src[si * src_channels]) << 8;
-                int32_t rv = src_channels > 1
-                    ? static_cast<int32_t>(src[si * src_channels + 1]) << 8
-                    : lv;
+                double src_pos = (static_cast<double>(f) * src_sample_rate) / dst_sample_rate;
+                int32_t i0 = static_cast<int32_t>(src_pos);
+                float frac = static_cast<float>(src_pos - i0);
+                if (i0 >= src_frames) i0 = src_frames - 1;
+                int32_t i1 = (i0 + 1 < src_frames) ? i0 + 1 : i0;
+
+                float lv0 = static_cast<float>(src[i0 * src_channels]);
+                float lv1 = static_cast<float>(src[i1 * src_channels]);
+                int32_t lv = static_cast<int32_t>(soft_limit_f(lv0 + (lv1 - lv0) * frac)) << 8;
+
+                int32_t rv = lv;
+                if (src_channels > 1) {
+                    float rv0 = static_cast<float>(src[i0 * src_channels + 1]);
+                    float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
+                    rv = static_cast<int32_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac)) << 8;
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     int32_t v = c == 0 ? lv : (c == 1 ? rv : 0);
                     *d++ = static_cast<uint8_t>(v & 0xFF);

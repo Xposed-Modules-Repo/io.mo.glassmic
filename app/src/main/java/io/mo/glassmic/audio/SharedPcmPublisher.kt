@@ -163,7 +163,7 @@ class SharedPcmPublisher @Inject constructor(
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
         val queue = Channel<ByteArray>(
-            capacity = 16,
+            capacity = 32,
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
