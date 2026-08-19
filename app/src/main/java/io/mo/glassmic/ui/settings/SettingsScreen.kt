@@ -213,6 +213,25 @@ fun SettingsScreen(
                 PlaybackPolicyPicker(cfg.playbackPolicy, vm::setPolicy)
             } }
 
+            item { Section(stringResource(R.string.settings_section_audio_monitor)) {
+                SwitchRow(
+                    label = stringResource(R.string.settings_audio_monitor_enabled),
+                    hint = stringResource(R.string.settings_audio_monitor_enabled_hint),
+                    checked = cfg.audioMonitor.enabled,
+                    onChange = vm::setAudioMonitorEnabled
+                )
+                if (cfg.audioMonitor.enabled) {
+                    val monVol = cfg.audioMonitor.volume.takeIf { it > 0f } ?: 1.0f
+                    LabeledSlider(
+                        label = stringResource(R.string.settings_audio_monitor_volume),
+                        value = monVol,
+                        valueRange = 0f..1f,
+                        display = "%.0f%%".format(monVol * 100),
+                        onChange = vm::setAudioMonitorVolume
+                    )
+                }
+            } }
+
             item { Section(stringResource(R.string.settings_section_compat)) {
                 SwitchRow(
                     label = stringResource(R.string.settings_visibility_compat),

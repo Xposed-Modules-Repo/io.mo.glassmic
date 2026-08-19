@@ -111,6 +111,9 @@ fun FloatingBubbleRoot(
     mode: FloatMode,
     activeFile: Boolean,
     paused: Boolean,
+    isStreaming: Boolean = false,
+    audioMonitorEnabled: Boolean = false,
+    onToggleAudioMonitor: () -> Unit = {},
     positionMs: Long,
     durationMs: Long,
     currentName: String?,
@@ -129,7 +132,9 @@ fun FloatingBubbleRoot(
     ttsGenerating: Boolean,
     ttsReady: Boolean,
     ttsFailed: Boolean,
+    ttsPreviewing: Boolean = false,
     onGenerateTts: (String) -> Unit,
+    onTogglePreviewTts: () -> Unit = {},
     onPlayTts: () -> Unit,
     ttsProgressBarEnabled: Boolean,
     ttsActive: Boolean,
@@ -155,7 +160,8 @@ fun FloatingBubbleRoot(
             sizeDp = sizeDp,
             iconPath = iconPath,
             opacity = opacity,
-            active = activeFile && !paused,
+            active = (activeFile || ttsActive) && !paused,
+            isStreaming = isStreaming,
             positionMs = positionMs,
             durationMs = durationMs,
             onTap = onBallTap,
@@ -165,6 +171,9 @@ fun FloatingBubbleRoot(
 
         FloatMode.MINI_BAR -> MiniBar(
             paused = paused,
+            isStreaming = isStreaming,
+            audioMonitorEnabled = audioMonitorEnabled,
+            onToggleAudioMonitor = onToggleAudioMonitor,
             positionMs = positionMs,
             durationMs = durationMs,
             currentName = currentName,
@@ -205,8 +214,13 @@ fun FloatingBubbleRoot(
                         generating = ttsGenerating,
                         ready = ttsReady,
                         failed = ttsFailed,
+                        previewing = ttsPreviewing,
                         onGenerate = onGenerateTts,
+                        onPreview = onTogglePreviewTts,
                         onPlay = onPlayTts,
+                        isStreaming = isStreaming,
+                        audioMonitorEnabled = audioMonitorEnabled,
+                        onToggleAudioMonitor = onToggleAudioMonitor,
                         progressBarEnabled = ttsProgressBarEnabled,
                         ttsActive = ttsActive,
                         positionMs = positionMs,
@@ -345,6 +359,7 @@ private fun Ball(
     iconPath: String?,
     opacity: Float,
     active: Boolean,
+    isStreaming: Boolean,
     positionMs: Long,
     durationMs: Long,
     onTap: () -> Unit,
@@ -365,13 +380,15 @@ private fun Ball(
         animationSpec = if (reduceMotion) snap() else tween(120, easing = FastOutSlowInEasing),
         label = "ballScale"
     )
-    // 呼吸：播放中让描边/进度轨微微起伏，静止时保持恒定，避免无谓的持续重绘
+    // 呼吸：播放/推流中让描边/进度轨起伏，推流时起伏更活跃
     val breath = if (active && !reduceMotion) {
         val transition = rememberInfiniteTransition(label = "ballBreath")
+        val maxAlpha = if (isStreaming) 0.60f else 0.38f
+        val duration = if (isStreaming) 1200 else 2400
         transition.animateFloat(
             initialValue = 0.18f,
-            targetValue = 0.38f,
-            animationSpec = infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            targetValue = maxAlpha,
+            animationSpec = infiniteRepeatable(tween(duration, easing = FastOutSlowInEasing), RepeatMode.Reverse),
             label = "ballBreathAlpha"
         ).value
     } else {
@@ -426,13 +443,13 @@ private fun Ball(
             )
             if (progress > 0f) {
                 drawArc(
-                    color = OverlayColors.Accent,
+                    color = if (isStreaming) OverlayColors.Accent else OverlayColors.Accent.copy(alpha = 0.8f),
                     startAngle = -90f,
                     sweepAngle = 360f * progress,
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = stroke)
+                    style = Stroke(width = if (isStreaming) stroke * 1.3f else stroke)
                 )
             }
         }
@@ -450,12 +467,15 @@ private fun Ball(
                         Modifier
                             .background(
                                 Brush.radialGradient(
-                                    colors = listOf(Color.White.copy(alpha = 0.20f), Color.Transparent),
+                                    colors = listOf(
+                                        if (isStreaming) OverlayColors.Accent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.20f),
+                                        Color.Transparent
+                                    ),
                                     center = Offset(innerPx * 0.32f, innerPx * 0.22f),
                                     radius = innerPx * 0.9f
                                 )
                             )
-                            .border(BorderStroke(0.8.dp, Color.White.copy(alpha = breath)), CircleShape)
+                            .border(BorderStroke(0.8.dp, if (isStreaming) OverlayColors.Accent.copy(alpha = breath) else Color.White.copy(alpha = breath)), CircleShape)
                     } else {
                         Modifier
                     }
@@ -474,15 +494,16 @@ private fun Ball(
             }
         }
 
-        // 没有时长可展示时（未播放/流式音源），退回原来的状态指示点
-        if (durationMs <= 0) {
+        // 状态指示点：当正在推流时显示高亮绿点（或者没有时长时显示状态点）
+        if (isStreaming || durationMs <= 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(2.dp)
-                    .size(sizeDp.value.times(0.16f).dp.coerceAtLeast(6.dp))
+                    .size(sizeDp.value.times(0.18f).dp.coerceAtLeast(7.dp))
                     .clip(CircleShape)
-                    .background(if (active) OverlayColors.Accent else OverlayColors.Idle)
+                    .background(if (isStreaming) OverlayColors.Accent else if (active) OverlayColors.Accent.copy(alpha = 0.6f) else OverlayColors.Idle)
+                    .border(BorderStroke(1.dp, Color.Black.copy(alpha = 0.4f)), CircleShape)
             )
         }
     }
@@ -492,6 +513,9 @@ private fun Ball(
 @Composable
 private fun MiniBar(
     paused: Boolean,
+    isStreaming: Boolean,
+    audioMonitorEnabled: Boolean,
+    onToggleAudioMonitor: () -> Unit,
     positionMs: Long,
     durationMs: Long,
     currentName: String?,
@@ -509,19 +533,51 @@ private fun MiniBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("⠿", color = OverlayColors.OnDarkFaint, fontSize = 14.sp)
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = currentName ?: "GlassMic",
+                        color = OverlayColors.OnDark,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (isStreaming) OverlayColors.Accent else OverlayColors.Idle)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = if (isStreaming) stringResource(R.string.float_streaming_live)
+                                   else stringResource(R.string.float_streaming_idle),
+                            color = if (isStreaming) OverlayColors.Accent else OverlayColors.OnDarkDim,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.width(4.dp))
+                // 耳返监听快切
                 Text(
-                    text = currentName ?: "GlassMic",
-                    color = OverlayColors.OnDark,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    text = "🎧",
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (audioMonitorEnabled) OverlayColors.Accent.copy(alpha = 0.28f) else OverlayColors.FillStrong)
+                        .border(
+                            BorderStroke(0.8.dp, if (audioMonitorEnabled) OverlayColors.Accent else Color.Transparent),
+                            CircleShape
+                        )
+                        .clickable(onClick = onToggleAudioMonitor)
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
                 )
+                Spacer(Modifier.width(4.dp))
                 // 换音源
                 IconChip(Icons.Filled.Refresh, stringResource(R.string.float_change_source), onOpenMenu)
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
                 // 播放/暂停
                 Text(
                     text = if (paused) "▶" else "⏸",
@@ -531,7 +587,7 @@ private fun MiniBar(
                         .clip(CircleShape)
                         .background(OverlayColors.FillStrong)
                         .clickable(onClick = onTogglePause)
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
                 )
             }
             Slider(
@@ -704,8 +760,13 @@ private fun TtsTab(
     generating: Boolean,
     ready: Boolean,
     failed: Boolean,
+    previewing: Boolean,
     onGenerate: (String) -> Unit,
+    onPreview: () -> Unit,
     onPlay: () -> Unit,
+    isStreaming: Boolean,
+    audioMonitorEnabled: Boolean,
+    onToggleAudioMonitor: () -> Unit,
     progressBarEnabled: Boolean,
     ttsActive: Boolean,
     positionMs: Long,
@@ -750,9 +811,50 @@ private fun TtsTab(
         )
     }
 
+    // 状态行：推流指示 + 耳返开关
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(if (isStreaming) OverlayColors.Accent else OverlayColors.Idle)
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = if (isStreaming) stringResource(R.string.float_streaming_live)
+                   else stringResource(R.string.float_streaming_idle),
+            color = if (isStreaming) OverlayColors.Accent else OverlayColors.OnDarkDim,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f)
+        )
+        // 耳返开关
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(OverlayShapes.Chip))
+                .background(if (audioMonitorEnabled) OverlayColors.Accent.copy(alpha = 0.25f) else OverlayColors.FillStrong)
+                .clickable(onClick = onToggleAudioMonitor)
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("🎧", fontSize = 11.sp)
+            Spacer(Modifier.width(4.dp))
+            Text(
+                stringResource(R.string.float_audio_monitor),
+                color = if (audioMonitorEnabled) OverlayColors.Accent else OverlayColors.OnDarkDim,
+                fontSize = 11.sp
+            )
+        }
+    }
+
+    // 操作按钮行：生成 / 本地试听 / 注入播放
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val canGenerate = !generating && text.isNotBlank()
@@ -764,6 +866,13 @@ private fun TtsTab(
             },
             style = if (canGenerate) PillStyle.Secondary else PillStyle.Disabled,
             onClick = { onGenerate(text.trim()) },
+            modifier = Modifier.weight(1f)
+        )
+        // 本地试听按钮
+        PillButton(
+            label = if (previewing) "⏹ 停止" else "🔊 试听",
+            style = if (ready) PillStyle.Secondary else PillStyle.Disabled,
+            onClick = onPreview,
             modifier = Modifier.weight(1f)
         )
         // 延时倒计时中：按钮变成「⏱ 1.5s 取消」，再点一次即取消本次播放
@@ -794,9 +903,9 @@ private fun TtsTab(
         )
     }
 
-    // 进度条：设置里开启后，生成/播放后可拖动控制播放进度
-    if (progressBarEnabled && (ready || ttsActive)) {
-        val hasDuration = ttsActive && durationMs > 0
+    // 进度条：生成就绪或正在播放时显示
+    if (ready || ttsActive) {
+        val hasDuration = durationMs > 0
         Slider(
             value = if (hasDuration) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
             onValueChange = onSeek,

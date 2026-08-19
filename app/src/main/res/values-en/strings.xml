@@ -292,5 +292,14 @@
     <string name="float_tts_delay_unit">sec</string>
     <string name="float_tts_delay_range">Enter a value between 0 and %1$d seconds</string>
     <string name="float_tts_delay_countdown">%1$ss · Cancel</string>
+    <string name="float_streaming_live">Streaming Live</string>
+    <string name="float_streaming_idle">Idle</string>
+    <string name="float_audio_monitor">Audio Monitor</string>
+
+    <!-- Settings → Live Audio Monitor -->
+    <string name="settings_section_audio_monitor">Live Audio Monitor</string>
+    <string name="settings_audio_monitor_enabled">Enable Live Audio Monitor</string>
+    <string name="settings_audio_monitor_enabled_hint">Simultaneously plays replaced audio through headphones/speakers while virtual mic is streaming</string>
+    <string name="settings_audio_monitor_volume">Monitor Volume</string>
 
 </resources>

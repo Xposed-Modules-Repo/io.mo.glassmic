@@ -188,8 +188,23 @@ class SettingsViewModel @Inject constructor(
      * 音量键双击快捷操作。开关只写配置——实际布防由悬浮窗服务在运行期间同步给 Xposed 侧，
      * 悬浮窗没开时这里打开也不会拦任何按键。
      */
-    fun setVolumeKeysEnabled(v: Boolean) = viewModelScope.launch {
-        configStore.update { it.setShortcuts(it.shortcuts.toBuilder().setVolumeKeysEnabled(v)) }
+    fun setVolumeKeysEnabled(enabled: Boolean) = viewModelScope.launch {
+        configStore.update { it.setShortcuts(it.shortcuts.toBuilder().setVolumeKeysEnabled(enabled)) }
+    }
+
+    // ============ 实时耳返 / 音频监听 ============
+    fun setAudioMonitorEnabled(enabled: Boolean) = viewModelScope.launch {
+        configStore.update {
+            val cur = it.audioMonitor
+            it.setAudioMonitor(cur.toBuilder().setEnabled(enabled))
+        }
+    }
+
+    fun setAudioMonitorVolume(volume: Float) = viewModelScope.launch {
+        configStore.update {
+            val cur = it.audioMonitor
+            it.setAudioMonitor(cur.toBuilder().setVolume(volume.coerceIn(0f, 1f)))
+        }
     }
 
     // ============ 默认播放策略 ============

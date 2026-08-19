@@ -37,6 +37,7 @@ data class HomeUiState(
     val policyLabel: String = "循环",
     val scopeLabel: String = "全局",
     val floatingWindowVisible: Boolean = false,
+    val isStreaming: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val progress: Float = 0f,
@@ -80,7 +81,7 @@ class HomeViewModel @Inject constructor(
         val group = groups.firstOrNull { it.id == rt.currentGroupId }
         HomeUiState(
             running = rt.enabled && !rt.safeMode && bootGate.userEnabledAfterBoot(),
-            hasFileSource = rt.currentSourceType == SourceType.FILE && clip != null,
+            hasFileSource = (rt.currentSourceType == SourceType.FILE && clip != null) || (rt.currentSourceType == SourceType.TTS && rt.durationMs > 0),
             paused = rt.paused,
             sourceName = when (rt.currentSourceType) {
                 SourceType.FILE -> clip?.displayName ?: rt.currentAudioId ?: "—"
@@ -102,6 +103,7 @@ class HomeViewModel @Inject constructor(
                 else -> AppLocale.string(context, R.string.scope_mode_global)
             },
             floatingWindowVisible = rt.floatingWindowVisible,
+            isStreaming = rt.isStreaming,
             positionMs = rt.positionMs,
             durationMs = rt.durationMs,
             progress = if (rt.durationMs > 0) rt.positionMs.toFloat() / rt.durationMs else 0f,

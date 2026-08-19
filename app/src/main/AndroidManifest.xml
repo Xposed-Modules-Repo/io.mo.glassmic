@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- 无 RECORD_AUDIO 时前台服务降级到 specialUse 类型，需要此权限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 音频推流防 CPU 睡眠唤醒锁 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- 通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

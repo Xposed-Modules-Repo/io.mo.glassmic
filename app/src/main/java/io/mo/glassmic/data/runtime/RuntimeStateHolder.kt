@@ -57,6 +57,9 @@ class RuntimeStateHolder @Inject constructor() {
     fun setFloatingVisible(visible: Boolean) =
         _flow.update { it.copy(floatingWindowVisible = visible) }
 
+    fun setStreaming(streaming: Boolean) =
+        _flow.update { if (it.isStreaming == streaming) it else it.copy(isStreaming = streaming) }
+
     fun setError(msg: String?) = _flow.update { it.copy(lastError = msg) }
 
     fun reset() {
