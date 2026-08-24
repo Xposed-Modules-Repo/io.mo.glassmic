@@ -138,6 +138,7 @@ class SharedPcmPublisher @Inject constructor(
         if (value) {
             monitorPlayer.pauseAndFlush()
         }
+        flushConsumers()
         runtime.setPaused(value)
         runtime.setStreaming(if (value) false else consumers.isNotEmpty())
         GlassLog.b("Publisher") { "paused=$value" }
@@ -145,12 +146,21 @@ class SharedPcmPublisher @Inject constructor(
 
     /** 把当前源跳转到指定毫秒。仅 FileAudioSource / BufferedPcmSource 支持，其他类型忽略。 */
     suspend fun seekCurrent(positionMs: Long) {
+        flushConsumers()
         when (val src = currentSource) {
             is FileAudioSource -> src.seekTo(positionMs)
             is BufferedPcmSource -> src.seekTo(positionMs)
             else -> return
         }
         runtime.setPosition(positionMs)
+    }
+
+    /** 清空所有 Consumer 队列中的残留数据并重置重采样状态，实现即时切换/暂停/Seek */
+    private fun flushConsumers() {
+        consumers.values.forEach { c ->
+            while (c.queue.tryReceive().isSuccess) {}
+            c.converter.reset()
+        }
     }
 
     /** Xposed 进程通过 ContentProvider 调到这里 */
@@ -160,10 +170,15 @@ class SharedPcmPublisher @Inject constructor(
         channels: Int,
         writeFd: ParcelFileDescriptor
     ) {
+        // 尝试缩减 Linux 内核 pipe buffer 至 8KB，消除内核层 64KB 缓冲膨胀
+        runCatching {
+            android.system.Os.fcntlInt(writeFd.fileDescriptor, 1031 /* F_SETPIPE_SZ */, 8192)
+        }
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
+        // 队列深度由 32 缩至 4 帧（~80ms），DROP_OLDEST 保障硬实时，彻底消灭 5s 延迟
         val queue = Channel<ByteArray>(
-            capacity = 32,
+            capacity = 4,
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
@@ -204,6 +219,7 @@ class SharedPcmPublisher @Inject constructor(
         audioId: String? = null
     ) {
         monitorPlayer.pauseAndFlush()
+        flushConsumers()
         currentSource.release()
         currentSource = src
         if (updateRuntime) {
