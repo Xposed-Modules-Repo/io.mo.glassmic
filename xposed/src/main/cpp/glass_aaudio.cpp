@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <thread>
 #include <unistd.h>
@@ -28,8 +29,8 @@ struct PcmFdState {
 static std::mutex g_fd_mutex;
 static PcmFdState g_fd_state;
 
-// 256KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调
-static SpscRingBuffer<262144> g_ring_buffer;
+// 8KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调，杜绝 Buffer Bloat 导致的 5s 延迟
+static SpscRingBuffer<8192> g_ring_buffer;
 static std::atomic<int> g_worker_fd{-1};
 static std::atomic<bool> g_worker_running{false};
 
@@ -283,7 +284,7 @@ static void convert_and_write(
 // 后台异步管道读取循环
 static void pcm_reader_worker_loop() {
     pthread_setname_np(pthread_self(), "GlassPcmWorker");
-    uint8_t chunk[4096];
+    uint8_t chunk[1024];
     while (g_worker_running.load(std::memory_order_relaxed)) {
         int fd = g_worker_fd.load(std::memory_order_acquire);
         if (fd < 0) {
@@ -293,7 +294,7 @@ static void pcm_reader_worker_loop() {
 
         // 环形缓冲已满时短暂让出 CPU
         if (g_ring_buffer.available_write() < sizeof(chunk)) {
-            usleep(5000); // 5ms
+            usleep(2000); // 2ms
             continue;
         }
 
@@ -372,9 +373,9 @@ static FillResult fill_pcm_impl(
     if (need_src_frames <= 0) need_src_frames = numFrames;
 
     size_t need_bytes = static_cast<size_t>(need_src_frames * src_channels * 2);
-    if (need_bytes > 32 * 1024) need_bytes = 32 * 1024;
+    if (need_bytes > 8192) need_bytes = 8192;
 
-    uint8_t tmp[32 * 1024];
+    uint8_t tmp[8192];
     size_t got = g_ring_buffer.read(tmp, need_bytes);
 
     if (got == 0) {
@@ -526,7 +527,12 @@ bool install_aaudio_hook() {
 }
 
 void set_decision(Decision decision) {
-    g_decision.store(static_cast<int32_t>(decision), std::memory_order_relaxed);
+    int32_t new_d = static_cast<int32_t>(decision);
+    int32_t old_d = g_decision.exchange(new_d, std::memory_order_relaxed);
+    if (old_d != new_d) {
+        g_ring_buffer.clear();
+        LOGI("decision changed %d -> %d, ring buffer cleared", old_d, new_d);
+    }
 }
 
 Decision get_decision() {
@@ -534,6 +540,17 @@ Decision get_decision() {
 }
 
 void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels) {
+    if (fd >= 0) {
+#if defined(F_SETPIPE_SZ)
+        int ret = fcntl(fd, F_SETPIPE_SZ, 8192);
+        if (ret < 0) {
+            LOGW("fcntl F_SETPIPE_SZ 8192 failed on fd=%d: %s", fd, strerror(errno));
+        } else {
+            LOGI("pipe buffer size resized to %d on fd=%d", ret, fd);
+        }
+#endif
+    }
+
     int old_fd = -1;
     {
         std::lock_guard<std::mutex> lock(g_fd_mutex);
