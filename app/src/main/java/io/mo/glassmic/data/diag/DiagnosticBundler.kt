@@ -7,14 +7,19 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.config.ConfigStore
+import io.mo.glassmic.data.db.AudioDao
+import io.mo.glassmic.data.runtime.AudioStatsRepository
 import io.mo.glassmic.data.runtime.BootGateRepository
+import io.mo.glassmic.data.runtime.EffectiveSourceResolver
 import io.mo.glassmic.data.runtime.HookStatusRepository
 import io.mo.glassmic.data.runtime.SafeModeRepository
+import io.mo.glassmic.data.runtime.VisibilityCompatRepository
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.memory.FairMemoryController
 import io.mo.glassmic.memory.MemoryProbe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -30,7 +35,7 @@ import javax.inject.Singleton
  * 诊断包导出。
  *
  * 默认脱敏：不写入用户路径、不写入 App 列表、不写入音频文件。
- * 内容仅限：环境信息、配置摘要、最近日志、安全模式记录、Xposed ping 状态。
+ * 内容仅限：环境信息、配置摘要、最近日志、安全模式记录、Xposed ping 状态、决策历史与拦截统计。
  *
  * 产物：filesDir/diagnostics/glassmic-diag-YYYYMMDD-HHmmss.zip
  * 返回值是可分享的 content:// Uri（用 FileProvider，需要 res/xml/file_paths.xml）。
@@ -42,7 +47,11 @@ class DiagnosticBundler @Inject constructor(
     private val safeModeRepo: SafeModeRepository,
     private val bootGate: BootGateRepository,
     private val hookStatusRepo: HookStatusRepository,
-    private val fairMemory: FairMemoryController
+    private val audioStatsRepo: AudioStatsRepository,
+    private val sourceResolver: EffectiveSourceResolver,
+    private val fairMemory: FairMemoryController,
+    private val visibilityCompatRepo: VisibilityCompatRepository,
+    private val audioDao: AudioDao
 ) {
 
     suspend fun export(): File = withContext(Dispatchers.IO) {
@@ -55,6 +64,8 @@ class DiagnosticBundler @Inject constructor(
             writeEntry(zip, "log.txt", GlassLog.dump())
             writeEntry(zip, "safe_mode.json", buildSafeMode())
             writeEntry(zip, "hook_status.json", buildHook())
+            writeEntry(zip, "audio_stats.json", buildAudioStats())
+            writeEntry(zip, "decisions.json", buildDecisions())
             writeEntry(zip, "memory.json", buildMemory())
         }
         GlassLog.b("Diag") { "诊断包已生成: ${target.name} size=${target.length()}" }
@@ -72,6 +83,8 @@ class DiagnosticBundler @Inject constructor(
 
     private suspend fun buildSummary(): String {
         val cfg = configStore.current()
+        val clip = if (cfg.currentAudioId.isNotBlank()) audioDao.findClip(cfg.currentAudioId) else null
+
         return JSONObject().apply {
             put("generated_at", System.currentTimeMillis())
             put("app", JSONObject().apply {
@@ -85,6 +98,13 @@ class DiagnosticBundler @Inject constructor(
                 put("brand", Build.BRAND)
                 put("model", Build.MODEL)
                 put("manufacturer", Build.MANUFACTURER)
+                put("supported_abis", JSONArray(Build.SUPPORTED_ABIS))
+                put("visibility_compat", visibilityCompatRepo.isEnabled())
+            })
+            put("native_hook_support", JSONArray().apply {
+                put("NDK AAudio (libaaudio.so shadowhook)")
+                put("OpenSL ES (libOpenSLES.so buffer queue)")
+                put("AudioRecord (libaudioclient.so native read)")
             })
             put("config", JSONObject().apply {
                 put("global_switch", cfg.globalSwitch)
@@ -98,6 +118,17 @@ class DiagnosticBundler @Inject constructor(
                 put("appearance_glass", cfg.appearance.glassEffect)
                 put("logging_level", cfg.logging.level.name)
                 put("experimental_unlocked", cfg.experimental.unlocked)
+            })
+            put("active_audio_metadata", JSONObject().apply {
+                put("has_clip", clip != null)
+                if (clip != null) {
+                    put("display_name", clip.displayName)
+                    put("duration_ms", clip.durationMs)
+                    put("size_bytes", clip.sizeBytes)
+                    put("sample_rate", clip.sampleRate)
+                    put("channels", clip.channels)
+                    put("mime_type", clip.mimeType)
+                }
             })
             put("boot_gate", JSONObject().apply {
                 put("user_enabled_after_boot", bootGate.userEnabledAfterBoot())
@@ -138,5 +169,32 @@ class DiagnosticBundler @Inject constructor(
             put("last_package", s.lastPackage ?: "")
             put("api", s.api)
         }.toString(2)
+    }
+
+    private fun buildAudioStats(): String {
+        val s = audioStatsRepo.snapshot()
+        return JSONObject().apply {
+            put("total_reads", s.totalReads)
+            put("total_bytes", s.totalBytes)
+            put("last_intercept_ms", s.lastInterceptMs)
+            put("last_package", s.lastPackage ?: "")
+            put("last_sample_rate", s.lastSampleRate)
+            put("last_channels", s.lastChannels)
+        }.toString(2)
+    }
+
+    private fun buildDecisions(): String {
+        val list = sourceResolver.getRecentDecisions()
+        val arr = JSONArray()
+        list.forEach { d ->
+            arr.put(JSONObject().apply {
+                put("timestamp", d.timestamp)
+                put("caller_package", d.callerPackage)
+                put("result", d.result.name)
+                put("reason_code", d.reasonCode)
+                put("reason_description", d.reasonDescription)
+            })
+        }
+        return arr.toString(2)
     }
 }

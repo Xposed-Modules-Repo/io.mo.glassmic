@@ -183,6 +183,49 @@
     <string name="settings_intercept_last_pkg">最近调用方</string>
     <string name="settings_intercept_format">采样率 / 声道</string>
 
+    <!-- 独立诊断中心 -->
+    <string name="diag_title">诊断中心</string>
+    <string name="diag_hint_toast">再点击 %1$d 次进入诊断中心</string>
+    <string name="diag_entered_toast">已进入诊断中心</string>
+
+    <string name="diag_section_device">设备与运行环境</string>
+    <string name="diag_device_model">机型与系统</string>
+    <string name="diag_device_abi">CPU 架构 (ABI)</string>
+    <string name="diag_device_memory">运行内存 (PSS / 堆)</string>
+    <string name="diag_device_visibility">严格 ROM 兼容</string>
+
+    <string name="diag_section_health">全链路健康自检</string>
+    <string name="diag_health_lsposed">LSPosed 注入状态</string>
+    <string name="diag_health_service">前台服务与运行态</string>
+    <string name="diag_health_scope">生效范围配置</string>
+    <string name="diag_health_source">当前音频源状态</string>
+    <string name="diag_health_intercept">音频劫持统计</string>
+    <string name="diag_status_ok">正常</string>
+    <string name="diag_status_warn">注意</string>
+    <string name="diag_status_error">异常</string>
+
+    <string name="diag_section_audio_detail">音源参数与管线</string>
+    <string name="diag_audio_source_type">当前音源类型</string>
+    <string name="diag_audio_name">音频名称</string>
+    <string name="diag_audio_format">音频格式参数</string>
+    <string name="diag_audio_duration_size">音频时长 / 大小</string>
+
+    <string name="diag_section_native_hooks">Native Hook 框架支持</string>
+    <string name="diag_hook_aaudio">NDK AAudio (shadowhook)</string>
+    <string name="diag_hook_opensl">OpenSL ES (buffer queue)</string>
+    <string name="diag_hook_audiorecord_native">libaudioclient (C++ read)</string>
+
+    <string name="diag_section_probe">音频推流自检与试听</string>
+    <string name="diag_probe_run">开始推流自检</string>
+    <string name="diag_probe_audition">试听推流音频</string>
+    <string name="diag_probe_audition_stop">停止试听</string>
+    <string name="diag_probe_hint">本地直接从 PCM 管道拉取音频并可回放试听，验证音频解码与推流管线是否正常通畅。</string>
+    <string name="diag_section_decisions">最近拦截决策追踪</string>
+    <string name="diag_decisions_empty">暂无应用请求拦截记录（当有目标 App 尝试录音时在此处记录）</string>
+    <string name="diag_decisions_hint">显示目标 App 触发录音钩子时的决策判定及原因（放行 / 劫持）。</string>
+    <string name="diag_section_logs">日志管理与诊断包</string>
+    <string name="diag_exporting">正在打包诊断数据…</string>
+
     <string name="settings_section_compat">兼容性</string>
     <string name="settings_visibility_compat">严格 ROM 兼容模式</string>
     <string name="settings_visibility_compat_hint">无效果时打开，会请求 Root 授权，授权后重启手机生效。</string>

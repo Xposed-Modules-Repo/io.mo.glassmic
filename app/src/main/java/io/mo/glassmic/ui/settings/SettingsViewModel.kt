@@ -9,8 +9,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.service.WaveformOverlayService
 import io.mo.glassmic.data.audio.FloatingIconStore
 import io.mo.glassmic.data.config.ConfigStore
-import io.mo.glassmic.data.diag.AudioPipelineProbe
-import io.mo.glassmic.data.diag.DiagnosticBundler
 import io.mo.glassmic.data.runtime.AudioStatsRepository
 import io.mo.glassmic.data.runtime.HookStatus
 import io.mo.glassmic.data.runtime.HookStatusRepository
@@ -21,7 +19,6 @@ import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.proto.FloatingSize
-import io.mo.glassmic.proto.LogLevel
 import io.mo.glassmic.proto.PlaybackPolicy
 import io.mo.glassmic.proto.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,12 +42,7 @@ data class SettingsUiState(
     val interceptLastMs: Long = 0L,
     val interceptLastPkg: String? = null,
     val interceptLastSr: Int = 0,
-    val interceptLastCh: Int = 0,
-    val exporting: Boolean = false,
-    val exportedUri: Uri? = null,
-    val exportError: String? = null,
-    val probing: Boolean = false,
-    val probeResult: AudioPipelineProbe.Result? = null
+    val interceptLastCh: Int = 0
 )
 
 @HiltViewModel
@@ -58,8 +50,6 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val configStore: ConfigStore,
     private val floatingIconStore: FloatingIconStore,
-    private val bundler: DiagnosticBundler,
-    private val probe: AudioPipelineProbe,
     private val audioStatsRepo: AudioStatsRepository,
     private val visibilityCompatRepo: VisibilityCompatRepository,
     hookStatusRepo: HookStatusRepository
@@ -87,20 +77,9 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    private val _exporting = MutableStateFlow(false)
-    private val _exportedUri = MutableStateFlow<Uri?>(null)
-    private val _exportError = MutableStateFlow<String?>(null)
-    private val _probing = MutableStateFlow(false)
-    private val _probeResult = MutableStateFlow<AudioPipelineProbe.Result?>(null)
-
     val state: StateFlow<SettingsUiState> = combine(
-        combine(configStore.flow, hookStatusRepo.flow, audioStatsRepo.flow) { cfg, hook, stats ->
-            Triple(cfg, hook, stats)
-        },
-        combine(_exporting, _exportedUri, _exportError) { e, u, err -> Triple(e, u, err) },
-        combine(_probing, _probeResult) { p, r -> p to r }
-    ) { core, exp, prb ->
-        val (cfg, hook, stats) = core
+        configStore.flow, hookStatusRepo.flow, audioStatsRepo.flow
+    ) { cfg, hook, stats ->
         SettingsUiState(
             config = cfg,
             hook = hook,
@@ -109,12 +88,7 @@ class SettingsViewModel @Inject constructor(
             interceptLastMs = stats.lastInterceptMs,
             interceptLastPkg = stats.lastPackage,
             interceptLastSr = stats.lastSampleRate,
-            interceptLastCh = stats.lastChannels,
-            exporting = exp.first,
-            exportedUri = exp.second,
-            exportError = exp.third,
-            probing = prb.first,
-            probeResult = prb.second
+            interceptLastCh = stats.lastChannels
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsUiState())
 
@@ -212,37 +186,6 @@ class SettingsViewModel @Inject constructor(
         configStore.update { it.setPlaybackPolicy(policy) }
     }
 
-    // ============ 日志 ============
-    fun setLogLevel(level: LogLevel) = viewModelScope.launch {
-        configStore.update { it.setLogging(it.logging.toBuilder().setLevel(level).setEnabled(level != LogLevel.OFF)) }
-        GlassLog.level = when (level) {
-            LogLevel.OFF -> io.mo.glassmic.core.model.LogLevel.OFF
-            LogLevel.BASIC -> io.mo.glassmic.core.model.LogLevel.BASIC
-            LogLevel.VERBOSE -> io.mo.glassmic.core.model.LogLevel.VERBOSE
-            LogLevel.DEBUG -> io.mo.glassmic.core.model.LogLevel.DEBUG
-            else -> io.mo.glassmic.core.model.LogLevel.BASIC
-        }
-        GlassLog.enabled = level != LogLevel.OFF
-    }
-
-    fun clearLog() {
-        GlassLog.clear()
-    }
-
-    fun exportDiagnostic() = viewModelScope.launch {
-        _exporting.value = true
-        _exportError.value = null
-        runCatching { bundler.export() }
-            .onSuccess { _exportedUri.value = bundler.shareUri(it) }
-            .onFailure { _exportError.value = it.message ?: "导出失败" }
-        _exporting.value = false
-    }
-
-    fun consumeExport() {
-        _exportedUri.value = null
-        _exportError.value = null
-    }
-
     // ============ 实验功能 ============
     fun setExperimentalUnlocked(unlocked: Boolean) = viewModelScope.launch {
         configStore.update { it.setExperimental(it.experimental.toBuilder().setUnlocked(unlocked)) }
@@ -283,17 +226,4 @@ class SettingsViewModel @Inject constructor(
             it.setExperimental(it.experimental.toBuilder().setSpeedFactor(v.coerceIn(0.5f, 2.0f)))
         }
     }
-
-    // ============ 管线自检 + 统计 ============
-    fun runPipelineProbe() {
-        if (_probing.value) return
-        _probing.value = true
-        _probeResult.value = null
-        viewModelScope.launch {
-            _probeResult.value = probe.probe()
-            _probing.value = false
-        }
-    }
-
-    fun consumeProbe() { _probeResult.value = null }
 }

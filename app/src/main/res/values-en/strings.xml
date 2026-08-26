@@ -183,6 +183,49 @@
     <string name="settings_intercept_last_pkg">Last Caller</string>
     <string name="settings_intercept_format">Sample Rate / Channels</string>
 
+    <!-- Dedicated Diagnostic Center -->
+    <string name="diag_title">Diagnostic Center</string>
+    <string name="diag_hint_toast">Tap %1$d more times to enter Diagnostic Center</string>
+    <string name="diag_entered_toast">Entered Diagnostic Center</string>
+
+    <string name="diag_section_device">Device &amp; Environment</string>
+    <string name="diag_device_model">Model &amp; OS</string>
+    <string name="diag_device_abi">CPU Architecture (ABI)</string>
+    <string name="diag_device_memory">Runtime Memory (PSS / Heap)</string>
+    <string name="diag_device_visibility">Strict ROM Compatibility</string>
+
+    <string name="diag_section_health">Full-Chain Health Check</string>
+    <string name="diag_health_lsposed">LSPosed Injection Status</string>
+    <string name="diag_health_service">Foreground Service &amp; Runtime</string>
+    <string name="diag_health_scope">Scope &amp; Rule Configuration</string>
+    <string name="diag_health_source">Current Audio Source</string>
+    <string name="diag_health_intercept">Audio Intercept Stats</string>
+    <string name="diag_status_ok">Normal</string>
+    <string name="diag_status_warn">Warning</string>
+    <string name="diag_status_error">Error</string>
+
+    <string name="diag_section_audio_detail">Active Audio &amp; Pipeline</string>
+    <string name="diag_audio_source_type">Active Source Type</string>
+    <string name="diag_audio_name">Audio Clip Name</string>
+    <string name="diag_audio_format">Audio Format</string>
+    <string name="diag_audio_duration_size">Duration / Size</string>
+
+    <string name="diag_section_native_hooks">Native Hook Framework</string>
+    <string name="diag_hook_aaudio">NDK AAudio (shadowhook)</string>
+    <string name="diag_hook_opensl">OpenSL ES (buffer queue)</string>
+    <string name="diag_hook_audiorecord_native">libaudioclient (C++ read)</string>
+
+    <string name="diag_section_probe">Pipeline Probe &amp; Audition</string>
+    <string name="diag_probe_run">Run Pipeline Probe</string>
+    <string name="diag_probe_audition">Audition Probed Audio</string>
+    <string name="diag_probe_audition_stop">Stop Audition</string>
+    <string name="diag_probe_hint">Pulls audio directly from the local PCM pipeline and plays it back to verify whether decoding and streaming pipelines work properly.</string>
+    <string name="diag_section_decisions">Recent Decision Trace</string>
+    <string name="diag_decisions_empty">No intercept requests recorded yet (logged when target apps attempt to record audio)</string>
+    <string name="diag_decisions_hint">Shows decisions and rationale when target apps trigger recording hooks (pass / intercept).</string>
+    <string name="diag_section_logs">Log Management &amp; Diagnostics</string>
+    <string name="diag_exporting">Packaging diagnostic bundle…</string>
+
     <string name="settings_section_compat">Compatibility</string>
     <string name="settings_visibility_compat">Strict ROM Compatibility Mode</string>
     <string name="settings_visibility_compat_hint">Enable this if the module has no effect. It will request root access and takes effect after rebooting once granted.</string>

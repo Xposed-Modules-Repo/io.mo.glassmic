@@ -29,7 +29,10 @@ class AudioPipelineProbe @Inject constructor(
         val bytesRead: Int,
         val durationMs: Long,
         val rms: Double,          // 16-bit PCM 振幅 RMS（0..32767）
-        val message: String
+        val message: String,
+        val pcmData: ByteArray? = null,
+        val sampleRate: Int = 48000,
+        val channels: Int = 1
     )
 
     /**
@@ -46,13 +49,17 @@ class AudioPipelineProbe @Inject constructor(
                 .getOrNull()
                 ?: return@withContext Result(
                     ok = false, bytesRead = 0, durationMs = 0, rms = 0.0,
-                    message = "无法打开 PCM 通道（可能没选音频或 Provider 未启动）"
+                    message = "无法打开 PCM 通道（可能没选音频或 Provider 未启动）",
+                    pcmData = null,
+                    sampleRate = sampleRate,
+                    channels = channels
                 )
 
             val start = System.currentTimeMillis()
             var total = 0
             var rms = 0.0
             var samples = 0L
+            val pcmOutput = java.io.ByteArrayOutputStream()
 
             val outcome = withTimeoutOrNull(durationMs + 500) {
                 FileInputStream(pfd.fileDescriptor).use { input ->
@@ -61,6 +68,7 @@ class AudioPipelineProbe @Inject constructor(
                         val n = runCatching { input.read(buf, 0, buf.size) }.getOrDefault(-1)
                         if (n <= 0) break
                         total += n
+                        pcmOutput.write(buf, 0, n)
                         // 把 16-bit LE 当成 short 累计 RMS
                         var i = 0
                         while (i + 1 < n) {
@@ -92,7 +100,10 @@ class AudioPipelineProbe @Inject constructor(
                 bytesRead = total,
                 durationMs = elapsed,
                 rms = rmsValue,
-                message = msg
+                message = msg,
+                pcmData = if (total > 0) pcmOutput.toByteArray() else null,
+                sampleRate = sampleRate,
+                channels = channels
             )
         }
 }

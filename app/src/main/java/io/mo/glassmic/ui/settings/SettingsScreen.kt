@@ -79,6 +79,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAiTts: () -> Unit,
+    onOpenDiagnostic: () -> Unit = {},
     vm: SettingsViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsState()
@@ -86,18 +87,31 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(state.exportedUri) {
-        val uri = state.exportedUri ?: return@LaunchedEffect
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    var versionTapCount by remember { mutableStateOf(0) }
+    var lastTapTime by remember { mutableStateOf(0L) }
+
+    val onVersionClick: () -> Unit = {
+        val now = System.currentTimeMillis()
+        if (now - lastTapTime > 1500L) {
+            versionTapCount = 1
+        } else {
+            versionTapCount++
         }
-        runCatching { context.startActivity(Intent.createChooser(send, "导出诊断包")) }
-        vm.consumeExport()
-    }
-    LaunchedEffect(state.exportError) {
-        state.exportError?.let { snackbar.showSnackbar(it); vm.consumeExport() }
+        lastTapTime = now
+
+        if (versionTapCount in 2..4) {
+            scope.launch {
+                snackbar.showSnackbar(
+                    context.getString(R.string.diag_hint_toast, 5 - versionTapCount)
+                )
+            }
+        } else if (versionTapCount >= 5) {
+            versionTapCount = 0
+            scope.launch {
+                snackbar.showSnackbar(context.getString(R.string.diag_entered_toast))
+            }
+            onOpenDiagnostic()
+        }
     }
 
     val iconError by vm.iconError.collectAsState()
@@ -308,27 +322,12 @@ fun SettingsScreen(
                 )
             } }
 
-            item { Section(stringResource(R.string.settings_section_diag)) {
-                LogLevelPicker(cfg.logging.level, vm::setLogLevel)
-                ActionRow(stringResource(R.string.settings_pipeline_probe),
-                    busy = state.probing,
-                    onClick = vm::runPipelineProbe)
-                state.probeResult?.let { ProbeResultCard(it) }
-                Text(
-                    stringResource(R.string.settings_pipeline_probe_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                ActionRow(stringResource(R.string.settings_export_diag),
-                    busy = state.exporting,
-                    onClick = vm::exportDiagnostic)
-                ActionRow(stringResource(R.string.settings_clear_log), onClick = vm::clearLog)
-            } }
-
             item { Section(stringResource(R.string.settings_section_about)) {
-                InfoRow(stringResource(R.string.settings_about_version),
-                    "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                InfoRow(
+                    label = stringResource(R.string.settings_about_version),
+                    value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    onClick = onVersionClick
+                )
                 InfoRow(stringResource(R.string.settings_about_license), "GPL-3.0")
                 InfoRow(stringResource(R.string.settings_about_repo), "github.com/lm060719/io.mo.glassmic")
             } }
@@ -440,10 +439,11 @@ private fun providerLabel(p: TtsProvider): String = when (p) {
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -581,22 +581,6 @@ private fun PlaybackPolicyPicker(current: PlaybackPolicy, onSelect: (PlaybackPol
     )
 }
 
-// ============ 日志级别 ============
-@Composable
-private fun LogLevelPicker(current: LogLevel, onSelect: (LogLevel) -> Unit) {
-    DropdownPickerRow(
-        title = stringResource(R.string.settings_log_level),
-        current = current,
-        options = listOf(
-            stringResource(R.string.settings_log_off) to LogLevel.OFF,
-            stringResource(R.string.settings_log_basic) to LogLevel.BASIC,
-            stringResource(R.string.settings_log_verbose) to LogLevel.VERBOSE,
-            stringResource(R.string.settings_log_debug) to LogLevel.DEBUG
-        ),
-        onSelect = onSelect
-    )
-}
-
 // ============ 悬浮窗不透明度 ============
 @Composable
 private fun OpacitySlider(value: Float, onChange: (Float) -> Unit) {
@@ -675,30 +659,4 @@ private fun FloatingIconRow(hasCustom: Boolean, onPick: () -> Unit, onReset: () 
     }
 }
 
-// ============ 自检结果 ============
-@Composable
-private fun ProbeResultCard(r: AudioPipelineProbe.Result) {
-    val color = if (r.ok && r.rms >= 1.0) Color(0xFF34C759)
-                else if (r.bytesRead > 0) Color(0xFFFFB020)
-                else Color(0xFFE5484D)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(8.dp).background(color, CircleShape))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(r.message, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            "字节: ${r.bytesRead}  ·  耗时: ${r.durationMs}ms  ·  RMS: %.1f".format(r.rms),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
-    }
-}
 

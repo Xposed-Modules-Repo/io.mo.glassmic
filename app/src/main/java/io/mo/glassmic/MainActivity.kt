@@ -20,6 +20,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.runtime.SafeModeRepository
+import io.mo.glassmic.ui.diag.DiagnosticScreen
 import io.mo.glassmic.ui.home.HomeScreen
 import io.mo.glassmic.ui.library.LibraryScreen
 import io.mo.glassmic.ui.onboarding.OnboardingFlow
@@ -93,6 +94,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val AI_TTS = "ai_tts"
     const val SAFE_MODE = "safemode"
+    const val DIAGNOSTICS = "diagnostics"
 }
 
 @Composable
@@ -126,10 +128,12 @@ private fun AppNavHost(nav: NavHostController, gate: GateDecision) {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
-                onOpenAiTts = { nav.navigate(Routes.AI_TTS) }
+                onOpenAiTts = { nav.navigate(Routes.AI_TTS) },
+                onOpenDiagnostic = { nav.navigate(Routes.DIAGNOSTICS) }
             )
         }
         composable(Routes.AI_TTS) { AiTtsSettingsScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.DIAGNOSTICS) { DiagnosticScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.SAFE_MODE) {
             SafeModeScreen(onExitComplete = {
                 nav.navigate(Routes.HOME) {
