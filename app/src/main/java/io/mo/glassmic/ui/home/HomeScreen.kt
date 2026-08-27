@@ -1,6 +1,7 @@
 package io.mo.glassmic.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -244,15 +245,27 @@ private fun InfoRow(
     clickable: Boolean = false,
     onClick: () -> Unit = {}
 ) {
-    val mod = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+    val mod = Modifier
+        .fillMaxWidth()
+        .then(
+            if (clickable) Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 12.dp, horizontal = 4.dp)
+            else Modifier.padding(vertical = 12.dp)
+        )
     Row(
-        modifier = if (clickable) mod else mod,
+        modifier = mod,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium,
              color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         Box(modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = if (clickable) "$value  ›" else value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (clickable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 

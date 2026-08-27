@@ -57,6 +57,7 @@ coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-androi
 
 # libxposed API 101（compileOnly）
 libxposed-api = { module = "io.github.libxposed:api", version = "101.0.1" }
+libxposed-service = { module = "io.github.libxposed:service", version = "101.0.0" }
 # legacy Xposed API 82（compileOnly，用于旧版 LSPosed 兼容入口）
 legacy-xposed-api = { module = "de.robv.android.xposed:api", version = "82" }
 

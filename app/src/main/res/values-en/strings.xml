@@ -65,7 +65,8 @@
     <string name="source_silence">Silence</string>
     <string name="source_tts">Text-to-Speech</string>
     <string name="home_policy_silence">Silence</string>
-    <string name="home_scope_whitelist_count">Whitelist (%1$d)</string>
+    <string name="home_scope_whitelist_count">%1$d apps enabled</string>
+    <string name="scope_none_selected">No target apps</string>
 
     <!-- Safe mode -->
     <string name="safe_mode_title">GlassMic has entered Safe Mode</string>
@@ -75,14 +76,21 @@
     <string name="safe_mode_exit_confirm">After exiting Safe Mode, you can turn GlassMic back on. If the issue recurs, please export a diagnostic bundle and report it.</string>
 
     <!-- Scope -->
-    <string name="scope_title">Effective Scope</string>
+    <string name="scope_title">Target Apps</string>
     <string name="scope_mode_global">System-wide</string>
     <string name="scope_mode_global_hint">Applies to all apps within scope (no package filtering)</string>
-    <string name="scope_mode_whitelist">Whitelist</string>
+    <string name="scope_mode_whitelist">Target Apps</string>
     <string name="scope_mode_whitelist_hint">Only applies to apps checked in the list</string>
-    <string name="scope_native_warn">Note: the module can only hook into app processes within LSPosed\'s scope; native daemons like audioserver and apps that use NDK AAudio directly are not covered.</string>
-    <string name="scope_lsposed_alert_title">⚠️ This sets in-app filtering, not the LSPosed injection switch</string>
-    <string name="scope_lsposed_alert_body">Whether you choose "System-wide" or "Whitelist" here, the module **must first be injected by LSPosed into the target app\'s process** to take effect.\n\nIf you find apps like WeChat / TikTok have no effect:\n1. Open "LSPosed Manager"\n2. Modules → GlassMic → Scope\n3. Check the app you want to hook\n4. Force-stop that app and reopen it</string>
+    <string name="scope_native_warn">Note: the module only injects into app processes within LSPosed\'s scope. If no prompt appeared, please confirm scope in LSPosed Manager and restart target apps.</string>
+    <string name="scope_lsposed_service_bound">● LSPosed service connected (checking apps will request scope dynamically)</string>
+    <string name="scope_lsposed_service_unbound">⚠️ LSPosed service not bound (please confirm scope in LSPosed Manager after checking)</string>
+    <string name="scope_event_prompted">Scope requested for %1$s, please confirm in popup</string>
+    <string name="scope_event_granted">%1$s scope granted! Please restart the app to apply</string>
+    <string name="scope_event_denied">%1$s scope request canceled/denied</string>
+    <string name="scope_event_unsupported">Added %1$s to target list. Please confirm scope in LSPosed Manager and restart</string>
+    <string name="scope_event_removed">Removed %1$s from target list</string>
+    <string name="scope_event_synced">Synced %1$d apps from LSPosed Manager</string>
+    <string name="scope_sync_tooltip">Sync scope from LSPosed Manager</string>
     <string name="scope_open_lsposed">Open LSPosed Manager</string>
     <string name="scope_open_lsposed_failed">LSPosed Manager not found</string>
     <string name="scope_show_system_apps">Show System Apps</string>

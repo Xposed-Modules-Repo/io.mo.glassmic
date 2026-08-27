@@ -96,11 +96,10 @@ class HomeViewModel @Inject constructor(
                 ProtoPolicy.REAL_MIC -> AppLocale.string(context, R.string.library_policy_real_mic)
                 else -> AppLocale.string(context, R.string.library_policy_loop)
             },
-            scopeLabel = when (cfg.scopeMode) {
-                ProtoScope.GLOBAL -> AppLocale.string(context, R.string.scope_mode_global)
-                ProtoScope.WHITELIST -> AppLocale.string(context, R.string.home_scope_whitelist_count, cfg.whitelistCount)
-                // BLACKLIST 已在 UI 上隐藏；旧配置统一按"全系统"展示
-                else -> AppLocale.string(context, R.string.scope_mode_global)
+            scopeLabel = if (cfg.whitelistCount > 0) {
+                AppLocale.string(context, R.string.home_scope_whitelist_count, cfg.whitelistCount)
+            } else {
+                AppLocale.string(context, R.string.scope_none_selected)
             },
             floatingWindowVisible = rt.floatingWindowVisible,
             isStreaming = rt.isStreaming,

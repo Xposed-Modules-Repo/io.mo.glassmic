@@ -69,6 +69,7 @@ import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.proto.FloatingSize
 import io.mo.glassmic.proto.LogLevel
 import io.mo.glassmic.proto.PlaybackPolicy
+import io.mo.glassmic.proto.ScopeMode
 import io.mo.glassmic.proto.ThemeMode
 import io.mo.glassmic.proto.TtsProvider
 import io.mo.glassmic.service.GlassTileService
@@ -78,6 +79,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenScope: () -> Unit = {},
     onOpenAiTts: () -> Unit,
     onOpenDiagnostic: () -> Unit = {},
     vm: SettingsViewModel = hiltViewModel()
@@ -220,6 +222,19 @@ fun SettingsScreen(
                     hint = stringResource(R.string.settings_volume_shortcut_hint),
                     checked = cfg.shortcuts.volumeKeysEnabled,
                     onChange = vm::setVolumeKeysEnabled
+                )
+            } }
+
+            item { Section(stringResource(R.string.scope_title)) {
+                val scopeSubtitle = if (cfg.whitelistCount > 0) {
+                    stringResource(R.string.home_scope_whitelist_count, cfg.whitelistCount)
+                } else {
+                    stringResource(R.string.scope_none_selected)
+                }
+                NavRow(
+                    title = stringResource(R.string.scope_title),
+                    subtitle = scopeSubtitle,
+                    onClick = onOpenScope
                 )
             } }
 

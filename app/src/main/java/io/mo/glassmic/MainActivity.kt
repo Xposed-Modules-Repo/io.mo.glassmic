@@ -128,6 +128,7 @@ private fun AppNavHost(nav: NavHostController, gate: GateDecision) {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
+                onOpenScope = { nav.navigate(Routes.SCOPE) },
                 onOpenAiTts = { nav.navigate(Routes.AI_TTS) },
                 onOpenDiagnostic = { nav.navigate(Routes.DIAGNOSTICS) }
             )

@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "io.mo.glassmic"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.mo.glassmic"
@@ -120,4 +120,7 @@ dependencies {
     // 协程
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
+
+    // libxposed service（用于向 LSPosed 动态申请应用作用域）
+    implementation(libs.libxposed.service)
 }

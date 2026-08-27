@@ -1,5 +1,6 @@
 package io.mo.glassmic.ui.scope
 
+import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -21,22 +22,28 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,8 +52,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.mo.glassmic.R
-import io.mo.glassmic.proto.ScopeMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +64,36 @@ fun ScopeScreen(
     vm: ScopeViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 当用户从 LSPosed 管理器切换回 GlassMic 时，自动触发静默同步
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                vm.syncFromManager(silent = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        vm.events.collect { event ->
+            val msg = when (event) {
+                is ScopeEvent.Prompted -> context.getString(R.string.scope_event_prompted, event.label)
+                is ScopeEvent.Granted -> context.getString(R.string.scope_event_granted, event.label)
+                is ScopeEvent.Denied -> context.getString(R.string.scope_event_denied, event.label)
+                is ScopeEvent.Unsupported -> context.getString(R.string.scope_event_unsupported, event.label)
+                is ScopeEvent.Removed -> context.getString(R.string.scope_event_removed, event.label)
+                is ScopeEvent.Synced -> context.getString(R.string.scope_event_synced, event.count)
+            }
+            snackbar.showSnackbar(msg)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -64,90 +103,71 @@ fun ScopeScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
+                },
+                actions = {
+                    IconButton(onClick = { vm.syncFromManager(silent = false) }) {
+                        Icon(
+                            Icons.Default.Sync,
+                            contentDescription = stringResource(R.string.scope_sync_tooltip)
+                        )
+                    }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbar) { Snackbar(snackbarData = it) } }
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            // ⚠️ 重要提示卡：本页设置 ≠ LSPosed 注入开关
-            LSPosedAlertCard()
+            // LSPosed 动态服务连接状态提示卡
+            LsposedServiceStatusCard(isBound = state.isLsposedServiceBound)
 
-            // 模式选择
-            ModeCard(
-                mode = state.mode,
-                onSelect = vm::setMode
+            // App 选择器（搜索、系统应用开关、应用列表）
+            AppPicker(
+                state = state,
+                onQuery = vm::setQuery,
+                onToggleSystem = vm::setShowSystemApps,
+                onToggleApp = vm::toggleApp
             )
-
-            // 边界说明
-            Text(
-                stringResource(R.string.scope_native_warn),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-            )
-
-            // 白名单时显示 App 选择器
-            if (state.mode == ScopeMode.WHITELIST) {
-                AppPicker(
-                    state = state,
-                    onQuery = vm::setQuery,
-                    onToggleSystem = vm::setShowSystemApps,
-                    onToggleApp = vm::toggleApp
-                )
-            } else {
-                Spacer(modifier = Modifier.height(8.dp))
-            }
         }
     }
 }
 
 @Composable
-private fun ModeCard(
-    mode: ScopeMode,
-    onSelect: (ScopeMode) -> Unit
-) {
+private fun LsposedServiceStatusCard(isBound: Boolean) {
+    if (isBound) return
+    val ctx = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .background(
+                Color(0xFFFFB020).copy(alpha = 0.12f),
+                RoundedCornerShape(12.dp)
+            )
+            .padding(14.dp)
     ) {
-        ModeRow(
-            title = stringResource(R.string.scope_mode_global),
-            hint = stringResource(R.string.scope_mode_global_hint),
-            selected = mode == ScopeMode.GLOBAL,
-            onSelect = { onSelect(ScopeMode.GLOBAL) }
-        )
-        ModeRow(
-            title = stringResource(R.string.scope_mode_whitelist),
-            hint = stringResource(R.string.scope_mode_whitelist_hint),
-            selected = mode == ScopeMode.WHITELIST,
-            onSelect = { onSelect(ScopeMode.WHITELIST) }
-        )
-    }
-}
-
-@Composable
-private fun ModeRow(
-    title: String,
-    hint: String,
-    selected: Boolean,
-    onSelect: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onSelect)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(selected = selected, onClick = onSelect)
-        Spacer(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            Text(hint, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        }
+            Text(
+                stringResource(R.string.scope_lsposed_service_unbound),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFB45309),
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    val opened = openLSPosedManager(ctx)
+                    if (!opened) {
+                        Toast.makeText(
+                            ctx,
+                            ctx.getString(R.string.scope_open_lsposed_failed),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(stringResource(R.string.scope_open_lsposed))
+            }
     }
 }
 
@@ -241,53 +261,8 @@ private fun AppPicker(
     }
 }
 
-@Composable
-private fun LSPosedAlertCard() {
-    val ctx = LocalContext.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(
-                Color(0xFFFFB020).copy(alpha = 0.12f),
-                RoundedCornerShape(12.dp)
-            )
-            .padding(14.dp)
-    ) {
-        Text(
-            stringResource(R.string.scope_lsposed_alert_title),
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = Color(0xFFB45309)
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            stringResource(R.string.scope_lsposed_alert_body),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = {
-                val opened = openLSPosedManager(ctx)
-                if (!opened) {
-                    Toast.makeText(
-                        ctx,
-                        ctx.getString(R.string.scope_open_lsposed_failed),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text(stringResource(R.string.scope_open_lsposed))
-        }
-    }
-}
-
 /** 尝试启动 LSPosed 管理器；同时兼容老的 EdXposed 入口。 */
-private fun openLSPosedManager(ctx: android.content.Context): Boolean {
+private fun openLSPosedManager(ctx: Context): Boolean {
     val candidates = listOf(
         "org.lsposed.manager",
         "io.github.lsposed.manager",

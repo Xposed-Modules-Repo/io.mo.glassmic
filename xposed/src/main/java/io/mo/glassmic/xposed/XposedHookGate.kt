@@ -22,12 +22,16 @@ object XposedHookGate {
     }
 
     private val PROTECTED_PROCESSES: Set<String> = setOf(
-        // Android 系统进程
+        // Android 系统与通话核心进程
         "android",
         "system",
+        "com.android.server.telecom",
         "com.android.systemui",
         "com.android.settings",
         "com.android.phone",
+        "com.android.incallui",
+        "com.android.dialer",
+        "com.google.android.dialer",
         "com.android.bluetooth",
         "com.android.nfc",
         "com.android.providers.settings",

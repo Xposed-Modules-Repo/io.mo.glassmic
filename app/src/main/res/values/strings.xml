@@ -65,7 +65,8 @@
     <string name="source_silence">静音</string>
     <string name="source_tts">文字转语音</string>
     <string name="home_policy_silence">静音</string>
-    <string name="home_scope_whitelist_count">白名单（%1$d）</string>
+    <string name="home_scope_whitelist_count">已启用 %1$d 个应用</string>
+    <string name="scope_none_selected">未选择目标应用</string>
 
     <!-- 安全模式 -->
     <string name="safe_mode_title">GlassMic 已进入安全模式</string>
@@ -75,14 +76,21 @@
     <string name="safe_mode_exit_confirm">退出安全模式后，你可以重新开启 GlassMic。若问题重复出现，请导出诊断包并反馈。</string>
 
     <!-- 作用域 -->
-    <string name="scope_title">生效范围</string>
+    <string name="scope_title">生效应用</string>
     <string name="scope_mode_global">全系统</string>
     <string name="scope_mode_global_hint">对作用域内所有 App 生效（不做包名过滤）</string>
-    <string name="scope_mode_whitelist">白名单</string>
+    <string name="scope_mode_whitelist">目标应用</string>
     <string name="scope_mode_whitelist_hint">仅清单内勾选的 App 生效</string>
-    <string name="scope_native_warn">注：模块只能注入到 LSPosed 作用域内的 App 进程；audioserver 等 native daemon 与走 NDK AAudio 的 App 不在覆盖范围内。</string>
-    <string name="scope_lsposed_alert_title">⚠️ 这里设置的是 App 内过滤，不是 LSPosed 注入开关</string>
-    <string name="scope_lsposed_alert_body">无论这里选「全系统」还是「白名单」，模块**先要被 LSPosed 注入到目标 App 进程**才能生效。\n\n如果你发现微信 / 抖音等 App 没效果：\n1. 打开「LSPosed 管理器」\n2. 模块 → GlassMic / 璃麦 → 作用域\n3. 勾选你要劫持的 App\n4. 强制停止那个 App 再重新打开</string>
+    <string name="scope_native_warn">注：模块只能注入到已在 LSPosed 作用域内的 App 进程中。勾选后若未弹窗，请在 LSPosed 管理器中确认作用域并重启目标应用。</string>
+    <string name="scope_lsposed_service_bound">● LSPosed 动态服务已连接（勾选应用将自动申请作用域授权）</string>
+    <string name="scope_lsposed_service_unbound">⚠️ LSPosed 动态服务未就绪（勾选后请在 LSPosed 管理器中确认作用域并重启应用）</string>
+    <string name="scope_event_prompted">已向 LSPosed 申请「%1$s」作用域，请在弹窗中确认</string>
+    <string name="scope_event_granted">「%1$s」作用域授权成功！请重新打开应用生效</string>
+    <string name="scope_event_denied">「%1$s」作用域授权已取消/拒绝</string>
+    <string name="scope_event_unsupported">已添加「%1$s」，请在 LSPosed 管理器中确认作用域并重启应用</string>
+    <string name="scope_event_removed">已移除「%1$s」</string>
+    <string name="scope_event_synced">已从 LSPosed 管理器同步 %1$d 个应用作用域</string>
+    <string name="scope_sync_tooltip">从 LSPosed 管理器同步作用域</string>
     <string name="scope_open_lsposed">打开 LSPosed 管理器</string>
     <string name="scope_open_lsposed_failed">未找到 LSPosed 管理器</string>
     <string name="scope_show_system_apps">显示系统应用</string>
