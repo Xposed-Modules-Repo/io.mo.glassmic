@@ -227,10 +227,12 @@ object AudioRecordHook {
         if (size < 0 || size > buf.remaining()) return HookDecision.Proceed
 
         val record = chain.getThisObject() as AudioRecord
+        val pos = buf.position()
         if (src == SourceType.SILENCE) {
             val isFloat = record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT
             if (isFloat) ComfortNoise.putFloat32(buf, size)
             else ComfortNoise.putPcm16(buf, size)
+            buf.position(pos)
             val bytesPerFrame = record.channelCount.coerceAtLeast(1) * (if (isFloat) 4 else 2)
             paceSilence(size / bytesPerFrame, record.sampleRate)
             accumulate(appCtx, pkg, size, record.sampleRate, record.channelCount)
@@ -238,7 +240,6 @@ object AudioRecordHook {
         }
 
         val reader = obtainReader(appCtx, record)
-        val pos = buf.position()
         val n = if (record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) {
             reader.readFloatBuffer(buf, size)
         } else {
@@ -251,6 +252,7 @@ object AudioRecordHook {
         if (n < size) {
             repeat(size - n) { buf.put(0.toByte()) }
         }
+        buf.position(pos)
         accumulate(appCtx, pkg, size, record.sampleRate, record.channelCount)
         return HookDecision.Replace(size)
     }

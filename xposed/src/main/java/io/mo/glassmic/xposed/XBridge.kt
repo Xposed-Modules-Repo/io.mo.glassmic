@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 object XBridge {
 
-    private const val CACHE_TTL_MS = 50L
+    private const val CACHE_TTL_MS = 200L
     // Provider 被禁用/不可达（= 前台服务未运行）时的回退缓存时长。
     // 拉长它，避免服务关闭期间某个 App 仍在录音时，每 50ms 就对已禁用的 Provider 空查询一次。
     private const val UNREACHABLE_TTL_MS = 2000L

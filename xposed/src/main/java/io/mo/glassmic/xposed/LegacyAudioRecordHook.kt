@@ -144,20 +144,22 @@ object LegacyAudioRecordHook {
             if (size < 0 || size > buf.remaining()) return@hook
 
             val record = param.thisObject as AudioRecord
+            val pos = buf.position()
             if (src == SourceType.SILENCE) {
                 ComfortNoise.putPcm16(buf, size)
+                buf.position(pos)
                 param.result = size
                 XBridge.recordInterception(appCtx, pkg, size, record.sampleRate, record.channelCount)
                 return@hook
             }
 
-            val pos = buf.position()
             val n = obtainReader(appCtx, record).read(buf, size)
             if (n < 0) {
                 buf.position(pos)
                 return@hook
             }
             if (n < size) repeat(size - n) { buf.put(0.toByte()) }
+            buf.position(pos)
             param.result = size
             XBridge.recordInterception(appCtx, pkg, size, record.sampleRate, record.channelCount)
         }

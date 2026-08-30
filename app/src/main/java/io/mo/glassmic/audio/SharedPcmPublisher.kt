@@ -170,15 +170,15 @@ class SharedPcmPublisher @Inject constructor(
         channels: Int,
         writeFd: ParcelFileDescriptor
     ) {
-        // 尝试缩减 Linux 内核 pipe buffer 至 8KB，消除内核层 64KB 缓冲膨胀
+        // 设置 Linux 内核 pipe buffer 至 32KB，兼顾低延迟与抗调度抖动
         runCatching {
-            android.system.Os.fcntlInt(writeFd.fileDescriptor, 1031 /* F_SETPIPE_SZ */, 8192)
+            android.system.Os.fcntlInt(writeFd.fileDescriptor, 1031 /* F_SETPIPE_SZ */, 32768)
         }
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
-        // 队列深度由 32 缩至 4 帧（~80ms），DROP_OLDEST 保障硬实时，彻底消灭 5s 延迟
+        // 队列深度扩容至 16 帧（~320ms），保障硬实时且彻底杜绝调度抖动引发的瞬时丢帧与爆音
         val queue = Channel<ByteArray>(
-            capacity = 4,
+            capacity = 16,
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
@@ -246,14 +246,14 @@ class SharedPcmPublisher @Inject constructor(
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             }
             val frame = ByteBuffer.allocate(FRAME_CHUNK_BYTES)
-            // 用纳秒高精度时钟维持实时节奏，避免每帧 delay 累计误差与时钟漂移
-            var nextSendAtNanos = System.nanoTime()
+            // 用纳秒高精度时钟维持实时节奏，预置 80ms 弹性缓冲垫（cushion），杜绝下游管道欠载
+            var nextSendAtNanos = System.nanoTime() - 80_000_000L
             while (isActive) {
                 if (consumers.isEmpty()) {
                     runtime.setStreaming(false)
                     monitorPlayer.pauseAndFlush()
                     kotlinx.coroutines.delay(50)
-                    nextSendAtNanos = System.nanoTime()  // 没消费者时重置基准
+                    nextSendAtNanos = System.nanoTime() - 80_000_000L  // 没消费者时重置基准并保持缓冲水位
                     continue
                 }
                 runtime.setStreaming(!paused)
@@ -294,7 +294,7 @@ class SharedPcmPublisher @Inject constructor(
                     n == -1 -> {
                         monitorPlayer.pauseAndFlush()
                         handleEof()
-                        nextSendAtNanos = System.nanoTime()
+                        nextSendAtNanos = System.nanoTime() - 80_000_000L
                     }
                     else -> {
                         monitorPlayer.pauseAndFlush()

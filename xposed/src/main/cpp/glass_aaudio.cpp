@@ -29,8 +29,8 @@ struct PcmFdState {
 static std::mutex g_fd_mutex;
 static PcmFdState g_fd_state;
 
-// 8KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调，杜绝 Buffer Bloat 导致的 5s 延迟
-static SpscRingBuffer<8192> g_ring_buffer;
+// 64KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调，提供充裕抗抖动弹性水位
+static SpscRingBuffer<65536> g_ring_buffer;
 static std::atomic<int> g_worker_fd{-1};
 static std::atomic<bool> g_worker_running{false};
 
@@ -170,14 +170,19 @@ static void convert_and_write(
                     float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
                     rv = static_cast<int16_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac));
                 }
+                // 欠载时在有效末尾极短淡出（16 帧），消除硬截断导致的咔哒杂音
+                if (valid_dst_frames < dst_frames && valid_dst_frames - f <= 16) {
+                    float fade = static_cast<float>(valid_dst_frames - f) / 16.0f;
+                    lv = static_cast<int16_t>(lv * fade);
+                    rv = static_cast<int16_t>(rv * fade);
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
                 }
             }
-            // 欠载不足部分填充舒适噪声，不拉伸
+            // 欠载不足部分静音填充，避免拼接白噪声切片
             for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
-                int16_t noise = static_cast<int16_t>(next_comfort_sample());
-                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = 0;
             }
             break;
         }
@@ -200,13 +205,17 @@ static void convert_and_write(
                     float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
                     rv = (rv0 + (rv1 - rv0) * frac) * kFloatScale;
                 }
+                if (valid_dst_frames < dst_frames && valid_dst_frames - f <= 16) {
+                    float fade = static_cast<float>(valid_dst_frames - f) / 16.0f;
+                    lv *= fade;
+                    rv *= fade;
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0.0f);
                 }
             }
             for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
-                float noise = next_comfort_sample() * kFloatScale;
-                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = 0.0f;
             }
             break;
         }
@@ -229,13 +238,17 @@ static void convert_and_write(
                     float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
                     rv = static_cast<int32_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac)) << 16;
                 }
+                if (valid_dst_frames < dst_frames && valid_dst_frames - f <= 16) {
+                    float fade = static_cast<float>(valid_dst_frames - f) / 16.0f;
+                    lv = static_cast<int32_t>(lv * fade);
+                    rv = static_cast<int32_t>(rv * fade);
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     *d++ = c == 0 ? lv : (c == 1 ? rv : 0);
                 }
             }
             for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
-                int32_t noise = next_comfort_sample() << 16;
-                for (int32_t c = 0; c < dst_channels; ++c) *d++ = noise;
+                for (int32_t c = 0; c < dst_channels; ++c) *d++ = 0;
             }
             break;
         }
@@ -258,6 +271,11 @@ static void convert_and_write(
                     float rv1 = static_cast<float>(src[i1 * src_channels + 1]);
                     rv = static_cast<int32_t>(soft_limit_f(rv0 + (rv1 - rv0) * frac)) << 8;
                 }
+                if (valid_dst_frames < dst_frames && valid_dst_frames - f <= 16) {
+                    float fade = static_cast<float>(valid_dst_frames - f) / 16.0f;
+                    lv = static_cast<int32_t>(lv * fade);
+                    rv = static_cast<int32_t>(rv * fade);
+                }
                 for (int32_t c = 0; c < dst_channels; ++c) {
                     int32_t v = c == 0 ? lv : (c == 1 ? rv : 0);
                     *d++ = static_cast<uint8_t>(v & 0xFF);
@@ -266,11 +284,8 @@ static void convert_and_write(
                 }
             }
             for (int32_t f = valid_dst_frames; f < dst_frames; ++f) {
-                int32_t v = next_comfort_sample() << 8;
                 for (int32_t c = 0; c < dst_channels; ++c) {
-                    *d++ = static_cast<uint8_t>(v & 0xFF);
-                    *d++ = static_cast<uint8_t>((v >> 8) & 0xFF);
-                    *d++ = static_cast<uint8_t>((v >> 16) & 0xFF);
+                    *d++ = 0; *d++ = 0; *d++ = 0;
                 }
             }
             break;
@@ -284,17 +299,17 @@ static void convert_and_write(
 // 后台异步管道读取循环
 static void pcm_reader_worker_loop() {
     pthread_setname_np(pthread_self(), "GlassPcmWorker");
-    uint8_t chunk[1024];
+    uint8_t chunk[2048];
     while (g_worker_running.load(std::memory_order_relaxed)) {
         int fd = g_worker_fd.load(std::memory_order_acquire);
         if (fd < 0) {
-            usleep(20000); // 20ms
+            usleep(10000); // 10ms
             continue;
         }
 
         // 环形缓冲已满时短暂让出 CPU
         if (g_ring_buffer.available_write() < sizeof(chunk)) {
-            usleep(2000); // 2ms
+            usleep(1000); // 1ms
             continue;
         }
 
@@ -305,7 +320,7 @@ static void pcm_reader_worker_loop() {
                 size_t n = g_ring_buffer.write(chunk + written, static_cast<size_t>(r) - written);
                 written += n;
                 if (written < static_cast<size_t>(r)) {
-                    usleep(1000); // 1ms
+                    usleep(500); // 0.5ms
                 }
             }
         } else if (r == 0) {
@@ -373,9 +388,9 @@ static FillResult fill_pcm_impl(
     if (need_src_frames <= 0) need_src_frames = numFrames;
 
     size_t need_bytes = static_cast<size_t>(need_src_frames * src_channels * 2);
-    if (need_bytes > 8192) need_bytes = 8192;
+    if (need_bytes > 16384) need_bytes = 16384;
 
-    uint8_t tmp[8192];
+    uint8_t tmp[16384];
     size_t got = g_ring_buffer.read(tmp, need_bytes);
 
     if (got == 0) {

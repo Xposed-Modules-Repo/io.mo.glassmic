@@ -84,7 +84,7 @@ object NativeAAudioHook {
         if (pollerStarted) return
         pollerStarted = true
         thread(name = "GlassMic-AAudioPoller", isDaemon = true, priority = Thread.MIN_PRIORITY) {
-            val pollIntervalMs = 250L
+            val pollIntervalMs = 80L
             while (true) {
                 try {
                     // 4.1 决策
@@ -98,7 +98,7 @@ object NativeAAudioHook {
                     nativeSetDecision(decisionCode)
 
                     // 4.2 PCM fd
-                    if (src == SourceType.FILE) {
+                    if (src == SourceType.FILE || src == SourceType.TTS) {
                         ensurePcmFd(ctx)
                     } else if (hasPushedFd) {
                         // native 端已经有 fd 了，但当前不需要——通知 native 关掉

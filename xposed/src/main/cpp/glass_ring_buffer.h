@@ -16,7 +16,7 @@ namespace glass {
  *
  * 保证音频回调线程读操作 O(1)、零锁、零内存分配、零系统调用。
  */
-template <size_t Capacity = 8192> // 默认 8KB (~85ms @ 48kHz / ~256ms @ 16kHz mono PCM16，消除 Buffer Bloat)
+template <size_t Capacity = 65536> // 默认 64KB (~680ms @ 48kHz / ~2s @ 16kHz mono PCM16，提供充裕抗抖动水位)
 class SpscRingBuffer {
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
 
