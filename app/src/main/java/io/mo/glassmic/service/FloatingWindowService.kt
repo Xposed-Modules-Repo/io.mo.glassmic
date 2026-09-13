@@ -4,16 +4,21 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.DisplayMetrics
 import android.view.Gravity
+import android.view.WindowInsets
 import android.view.WindowManager
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -66,10 +71,12 @@ class FloatingWindowService : LifecycleService() {
     private var params: WindowManager.LayoutParams? = null
 
     private val modeFlow = MutableStateFlow(FloatMode.BALL)
+    private val overlayBoundsFlow = MutableStateFlow(Rect())
+    private val clampRunnable = Runnable { clampToBounds() }
 
     /**
      * 悬浮球的锚点位置（用户拖动决定）。
-     * 展开态（菜单/迷你条/TTS）面板比球宽，靠右时会被 [clampExpandedX] 临时左移避让屏幕边缘，
+     * 展开态（菜单/迷你条/TTS）面板比球宽，靠右时会被 [clampToBounds] 临时左移避让屏幕边缘，
      * 但该偏移不写回锚点；收起时按锚点还原，否则球会一次次被"推"到屏幕左侧。
      */
     private var anchorX = DEFAULT_X
@@ -98,6 +105,12 @@ class FloatingWindowService : LifecycleService() {
         return START_NOT_STICKY
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        refreshOverlayBounds()
+        host?.view?.requestApplyInsets()
+    }
+
     override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
@@ -108,6 +121,7 @@ class FloatingWindowService : LifecycleService() {
         // 不会留下「悬浮窗已关、音量键却还发涩」的空窗期。
         applyVolumeShortcut(false)
         host?.let { h ->
+            h.view.removeCallbacks(clampRunnable)
             runCatching { windowManager?.removeView(h.view) }
             h.onDestroy()
         }
@@ -209,6 +223,17 @@ class FloatingWindowService : LifecycleService() {
         // 这里手动包一层 Locale Context 传给 ComposeView，保证悬浮窗文案也能正确显示。
         val overlayHost = FloatingOverlayHost(AppLocale.wrap(this)).also { it.onCreate() }
         host = overlayHost
+        refreshOverlayBounds()
+        overlayHost.view.setOnApplyWindowInsetsListener { _, insets ->
+            refreshOverlayBounds(insets)
+            insets
+        }
+        // 等 Compose 完成实际测量后再约束位置；分组加载、字号变化和旋转都可能改变高度。
+        overlayHost.view.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                scheduleClampToBounds()
+            }
+        }
         overlayHost.setContent {
             // 悬浮窗以前只包了裸 MaterialTheme{}，Slider/Switch 会用 Material3 默认紫色，
             // 和面板里的绿色 Accent 打架。挂上 OverlayColorScheme 后它们自动跟随主色。
@@ -218,6 +243,8 @@ class FloatingWindowService : LifecycleService() {
                 val groups by audioDao.observeGroups().collectAsState(initial = emptyList())
                 val allClips by audioDao.observeAllClips().collectAsState(initial = emptyList())
                 val mode by modeFlow.collectAsState()
+                val overlayBounds by overlayBoundsFlow.collectAsState()
+                val density = LocalDensity.current
                 val ttsGen by playback.ttsGen.collectAsState()
                 val ttsPreviewing by playback.ttsPreviewing.collectAsState()
                 val ttsDelayRemainingMs by playback.ttsDelayRemainingMs.collectAsState()
@@ -234,6 +261,8 @@ class FloatingWindowService : LifecycleService() {
                 ) {
                 FloatingBubbleRoot(
                     mode = mode,
+                    panelMaxWidth = with(density) { overlayBounds.width().toDp() },
+                    panelMaxHeight = with(density) { overlayBounds.height().toDp() },
                     activeFile = activeFile,
                     paused = rt.paused,
                     isStreaming = rt.isStreaming,
@@ -379,13 +408,13 @@ class FloatingWindowService : LifecycleService() {
         modeFlow.value = mode
         // TTS 面板与其设置面板（自定义延时输入）需要输入法焦点，其它态保持不可聚焦（不拦截触摸）
         setWindowFocusable(mode == FloatMode.TTS || mode == FloatMode.TTS_SETTINGS)
-        // 展开态（迷你条/菜单/TTS）确保不超出屏幕右边；收起时还原到球的锚点
-        if (mode != FloatMode.BALL) clampExpandedX() else restoreAnchor()
+        // 展开后的边界约束由布局监听按实际尺寸执行；收起时还原到球的锚点。
+        if (mode == FloatMode.BALL) restoreAnchor()
     }
 
     /**
      * 收起为球态时还原用户拖动过的锚点位置。
-     * 边界兜底放到 post 里执行：此刻 view 仍是展开态的宽度，需等重新测量成球的尺寸后再 clamp，
+     * 边界兜底由布局监听执行：此刻 view 仍是展开态的宽度，需等重新测量成球的尺寸后再 clamp，
      * 否则会用面板宽度去约束球，把靠右的球再次推向左边。
      */
     private fun restoreAnchor() {
@@ -394,7 +423,6 @@ class FloatingWindowService : LifecycleService() {
         lp.x = anchorX
         lp.y = anchorY
         runCatching { windowManager?.updateViewLayout(h.view, lp) }
-        h.view.post { clampToBounds() }
     }
 
     /**
@@ -417,26 +445,62 @@ class FloatingWindowService : LifecycleService() {
         runCatching { windowManager?.updateViewLayout(h.view, lp) }
     }
 
-    /** 边界兜底：把悬浮球约束在屏幕内，但不贴边，保留自由悬停位置。 */
+    /** 屏幕安全区域，始终预留系统栏、刘海和 8dp 边距。Android 10 使用稳定 Insets。 */
+    @Suppress("DEPRECATION")
+    private fun refreshOverlayBounds(appliedInsets: WindowInsets? = host?.view?.rootWindowInsets) {
+        val wm = windowManager ?: return
+        val bounds: Rect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = wm.currentWindowMetrics
+            bounds = Rect(metrics.bounds)
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            bounds.inset(insets.left, insets.top, insets.right, insets.bottom)
+        } else {
+            val metrics = DisplayMetrics()
+            wm.defaultDisplay.getRealMetrics(metrics)
+            bounds = Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+            appliedInsets?.let { insets ->
+                val cutout = insets.displayCutout
+                bounds.inset(
+                    maxOf(insets.stableInsetLeft, cutout?.safeInsetLeft ?: 0),
+                    maxOf(insets.stableInsetTop, cutout?.safeInsetTop ?: 0),
+                    maxOf(insets.stableInsetRight, cutout?.safeInsetRight ?: 0),
+                    maxOf(insets.stableInsetBottom, cutout?.safeInsetBottom ?: 0)
+                )
+            }
+        }
+        val margin = dpToPx(8)
+        if (bounds.width() > margin * 2 && bounds.height() > margin * 2) {
+            bounds.inset(margin, margin)
+        }
+        if (bounds.isEmpty || bounds == overlayBoundsFlow.value) return
+        overlayBoundsFlow.value = bounds
+        scheduleClampToBounds()
+    }
+
+    /** 合并同一帧的 Insets / 布局回调，避免对尚未生效的位置重复叠加修正量。 */
+    private fun scheduleClampToBounds() {
+        val view = host?.view ?: return
+        view.removeCallbacks(clampRunnable)
+        view.postOnAnimation(clampRunnable)
+    }
+
+    /** 以实际屏幕坐标约束窗口，避免不同系统的悬浮窗原点/系统栏偏移导致越界。 */
     private fun clampToBounds() {
         val lp = params ?: return
         val h = host ?: return
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        val viewW = h.view.width.takeIf { it > 0 } ?: dpToPx(56)
-        val viewH = h.view.height.takeIf { it > 0 } ?: dpToPx(56)
-        lp.x = lp.x.coerceIn(0, (screenW - viewW).coerceAtLeast(0))
-        lp.y = lp.y.coerceIn(0, (screenH - viewH).coerceAtLeast(0))
-        runCatching { windowManager?.updateViewLayout(h.view, lp) }
-    }
-
-    private fun clampExpandedX() {
-        val lp = params ?: return
-        val h = host ?: return
-        val screenW = resources.displayMetrics.widthPixels
-        val panelW = dpToPx(EXPANDED_PANEL_WIDTH_DP)
-        if (lp.x + panelW > screenW) lp.x = (screenW - panelW).coerceAtLeast(8)
-        if (lp.x < 8) lp.x = 8
+        if (!h.view.isAttachedToWindow || h.view.width == 0 || h.view.height == 0) return
+        val bounds = overlayBoundsFlow.value
+        if (bounds.isEmpty) return
+        val location = IntArray(2)
+        h.view.getLocationOnScreen(location)
+        val targetX = location[0].coerceIn(bounds.left, maxOf(bounds.left, bounds.right - h.view.width))
+        val targetY = location[1].coerceIn(bounds.top, maxOf(bounds.top, bounds.bottom - h.view.height))
+        if (targetX == location[0] && targetY == location[1]) return
+        lp.x += targetX - location[0]
+        lp.y += targetY - location[1]
         runCatching { windowManager?.updateViewLayout(h.view, lp) }
     }
 

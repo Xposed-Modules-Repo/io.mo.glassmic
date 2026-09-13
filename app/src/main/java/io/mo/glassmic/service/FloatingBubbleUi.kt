@@ -31,7 +31,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,7 +62,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -92,8 +97,7 @@ data class FloatGroupItem(val id: String, val emoji: String, val name: String)
 data class FloatClipItem(val id: String, val name: String, val isCurrent: Boolean)
 
 /**
- * 展开态面板固定宽度。四种展开态共用同一个宽度，切 tab 时面板才不会横向跳动。
- * 服务端做右边缘避让时也按这个值算 —— 改宽度只改这里，不要再在别处写死数字。
+ * 展开态面板的默认宽度。音频库 / TTS 共用外壳，在窄屏时按可用宽度收缩。
  */
 const val EXPANDED_PANEL_WIDTH_DP = 308
 val EXPANDED_PANEL_WIDTH: Dp = EXPANDED_PANEL_WIDTH_DP.dp
@@ -109,6 +113,8 @@ private const val TAB_LIBRARY = 1
 @Composable
 fun FloatingBubbleRoot(
     mode: FloatMode,
+    panelMaxWidth: Dp,
+    panelMaxHeight: Dp,
     activeFile: Boolean,
     paused: Boolean,
     isStreaming: Boolean = false,
@@ -191,6 +197,9 @@ fun FloatingBubbleRoot(
         FloatMode.MENU, FloatMode.TTS -> {
             val onTts = mode == FloatMode.TTS
             ExpandedPanel(
+                maxWidth = panelMaxWidth,
+                // 音频库按可用高度压缩列表；TTS 仍沿用自身的输入法布局策略。
+                maxHeight = if (onTts) Dp.Infinity else panelMaxHeight,
                 onCollapse = onCollapse,
                 onDragBy = onDragBy,
                 onDragEnd = onDragEnd,
@@ -281,6 +290,8 @@ private fun ExpandedPanel(
     onCollapse: () -> Unit,
     onDragBy: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
+    maxWidth: Dp = EXPANDED_PANEL_WIDTH,
+    maxHeight: Dp = Dp.Infinity,
     tabIndex: Int? = null,
     onSelectTab: (Int) -> Unit = {},
     title: String? = null,
@@ -288,7 +299,7 @@ private fun ExpandedPanel(
     titleTrailing: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    GlassPanel(modifier = Modifier.width(EXPANDED_PANEL_WIDTH)) {
+    GlassPanel(modifier = Modifier.width(minOf(EXPANDED_PANEL_WIDTH, maxWidth)).heightIn(max = maxHeight)) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(
                 modifier = Modifier
@@ -626,7 +637,7 @@ private fun IconChip(icon: androidx.compose.ui.graphics.vector.ImageVector, desc
 
 // ============ 音频库 tab（两级：分组 → 片段）============
 @Composable
-private fun LibraryTab(
+private fun ColumnScope.LibraryTab(
     groups: List<FloatGroupItem>,
     selectedGroup: FloatGroupItem?,
     onSelectGroup: (FloatGroupItem?) -> Unit,
@@ -637,7 +648,15 @@ private fun LibraryTab(
         if (groups.isEmpty()) {
             EmptyHint(stringResource(R.string.float_no_groups))
         } else {
-            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+            val listState = rememberLazyListState()
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 320.dp)
+                    .libraryScrollbar(listState)
+                    .padding(end = 10.dp)
+            ) {
                 items(groups, key = { it.id }) { g ->
                     GroupRow(group = g) { onSelectGroup(g) }
                 }
@@ -677,13 +696,56 @@ private fun LibraryTab(
         if (clips.isEmpty()) {
             EmptyHint(stringResource(R.string.float_no_clips_in_group))
         } else {
-            LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                items(clips, key = { it.id }) { c ->
-                    ClipRow(clip = c) { onSelectClip(c.id) }
+            key(selectedGroup.id) {
+                val listState = rememberLazyListState()
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .heightIn(max = 300.dp)
+                        .libraryScrollbar(listState)
+                        .padding(end = 10.dp)
+                ) {
+                    items(clips, key = { it.id }) { c ->
+                        ClipRow(clip = c) { onSelectClip(c.id) }
+                    }
                 }
             }
         }
     }
+}
+
+/** 只绘制滚动位置提示，不拦截列表滑动和音频点击。按可见条目比例计算，兼容字体缩放。 */
+private fun Modifier.libraryScrollbar(state: LazyListState): Modifier = drawWithContent {
+    drawContent()
+    if (!state.canScrollBackward && !state.canScrollForward) return@drawWithContent
+    val info = state.layoutInfo
+    val first = info.visibleItemsInfo.firstOrNull() ?: return@drawWithContent
+    val last = info.visibleItemsInfo.last()
+    if (info.totalItemsCount == 0 || size.height <= 0f) return@drawWithContent
+
+    val start = first.index + ((info.viewportStartOffset - first.offset).toFloat() /
+        first.size.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val end = last.index + ((info.viewportEndOffset - last.offset).toFloat() /
+        last.size.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val visible = (end - start).coerceIn(0f, info.totalItemsCount.toFloat())
+    val thumbHeight = (size.height * visible / info.totalItemsCount)
+        .coerceIn(minOf(24.dp.toPx(), size.height), size.height)
+    val progress = when {
+        !state.canScrollBackward -> 0f
+        !state.canScrollForward -> 1f
+        else -> (start / (info.totalItemsCount - visible).coerceAtLeast(1f)).coerceIn(0f, 1f)
+    }
+    val width = 3.dp.toPx()
+    val left = size.width - width
+    val radius = CornerRadius(width / 2f)
+    drawRoundRect(OverlayColors.Fill, Offset(left, 0f), Size(width, size.height), radius)
+    drawRoundRect(
+        OverlayColors.OnDarkFaint,
+        Offset(left, (size.height - thumbHeight) * progress),
+        Size(width, thumbHeight),
+        radius
+    )
 }
 
 /** 分组行：emoji 装进圆角方块，和纯文字的片段行拉开层级。 */
