@@ -131,7 +131,7 @@ static void my_bq_callback(SLAndroidSimpleBufferQueueItf caller, void* pContext)
         int32_t bps = (fmt == SampleFmt::FLOAT) ? 4 : 2;
         int32_t frames = static_cast<int32_t>(size / (static_cast<uint32_t>(ch) * bps));
         if (frames > 0) {
-            fill_pcm(const_cast<void*>(buf), fmt, ch, sr, frames);
+            fill_pcm(const_cast<void*>(buf), fmt, ch, sr, frames, CapturePath::OPENSL);
         }
     }
 

@@ -180,6 +180,7 @@ class DiagnosticBundler @Inject constructor(
             put("last_package", s.lastPackage ?: "")
             put("last_sample_rate", s.lastSampleRate)
             put("last_channels", s.lastChannels)
+            audioStatsRepo.nativeDiagnostics()?.let { put("native_diagnostics", JSONObject(it)) }
         }.toString(2)
     }
 

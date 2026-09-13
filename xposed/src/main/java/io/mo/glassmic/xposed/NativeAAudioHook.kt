@@ -3,6 +3,7 @@ package io.mo.glassmic.xposed
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import com.bytedance.shadowhook.ShadowHook
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.SourceType
@@ -109,18 +110,32 @@ object NativeAAudioHook {
                     }
 
                     // 4.3 上报统计——native 已经聚合好了，走 batch 接口
-                    val stats = nativeDrainStats()  // [reads, bytes, sr, ch]
+                    val stats = nativeDrainStats()  // [reads, bytes, sr, ch, underruns, missing, requested, path]
                     if (stats != null && stats.size >= 4) {
                         val reads = stats[0].toInt()
                         val bytes = stats[1]
                         val sr = stats[2].toInt()
                         val ch = stats[3].toInt()
-                        if (reads > 0 && bytes > 0) {
+                        // 全欠载时 bytes=0 也必须上报，否则诊断会一直显示旧应用的数据。
+                        if (reads > 0) {
+                            val diagnostics = if (stats.size >= 8) Bundle().apply {
+                                putLong("underrun_reads", stats[4])
+                                putLong("missing_frames", stats[5])
+                                putLong("requested_frames", stats[6])
+                                putString("path", when (stats[7].toInt()) {
+                                    1 -> "AAudio.read"
+                                    2 -> "AAudio.callback"
+                                    3 -> "AudioRecord.native"
+                                    4 -> "OpenSL.callback"
+                                    else -> "unknown"
+                                })
+                            } else null
                             XBridge.reportInterceptBatch(
                                 ctx, callerPackage,
                                 deltaReads = reads,
                                 deltaBytes = bytes,
-                                sampleRate = sr, channels = ch
+                                sampleRate = sr, channels = ch,
+                                nativeDiagnostics = diagnostics
                             )
                         }
                     }

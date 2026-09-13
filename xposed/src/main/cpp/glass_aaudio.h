@@ -20,13 +20,24 @@ enum class SampleFmt : int32_t {
     FLOAT = 1,
 };
 
+enum class CapturePath : int32_t {
+    AAUDIO_READ = 1,
+    AAUDIO_CALLBACK = 2,
+    AUDIORECORD = 3,
+    OPENSL = 4,
+};
+
+// AAudio legacy backend 可在同一线程调用 AudioRecord::read；外层负责覆盖，
+// 内层不得再消耗一次同一条 PCM 流。
+inline thread_local bool aaudio_read_in_progress = false;
+
 /**
  * 把虚拟音源按目标 PCM 格式填进 buffer。AAudio 与 OpenSL ES 路径共用同一份
  * decision / pcm-fd / 统计状态。
  * 返回 true 表示已用虚拟数据覆盖 buffer；false 表示当前应放行真实麦克风
- * （REAL_MIC，或 FILE 但暂无可读数据）。
+ * （REAL_MIC）。FILE 欠载时补零并记录缺失帧。
  */
-bool fill_pcm(void* buffer, SampleFmt fmt, int32_t channels, int32_t sample_rate, int32_t frames);
+bool fill_pcm(void* buffer, SampleFmt fmt, int32_t channels, int32_t sample_rate, int32_t frames, CapturePath path);
 
 /** 由 Kotlin 侧轮询线程定期推送当前决策。原子写。 */
 void set_decision(Decision d);
@@ -43,6 +54,8 @@ void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels);
  * 由 Kotlin 侧轮询线程调用，再上报给 ContentProvider。
  */
 void drain_stats(uint64_t* out_reads, uint64_t* out_bytes,
-                 int32_t* out_last_sr, int32_t* out_last_ch);
+                 int32_t* out_last_sr, int32_t* out_last_ch,
+                 uint64_t* out_underruns, uint64_t* out_missing_frames,
+                 uint64_t* out_requested_frames, int32_t* out_path);
 
 } // namespace glass

@@ -23,6 +23,7 @@ object Constants {
     const val AUDIO_STATS_LAST_PACKAGE = "last_package"
     const val AUDIO_STATS_LAST_SAMPLE_RATE = "last_sample_rate"
     const val AUDIO_STATS_LAST_CHANNELS = "last_channels"
+    const val AUDIO_STATS_NATIVE_DIAGNOSTICS = "native_diagnostics"
     const val METHOD_AUDIO_INTERCEPT = "audio_intercept"
 
     // ContentProvider authorities

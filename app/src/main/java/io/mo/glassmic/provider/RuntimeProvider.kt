@@ -13,6 +13,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.runtime.EffectiveSourceResolver
+import org.json.JSONObject
 
 /**
  * 给 Xposed 进程查询"针对某个调用方包名，应该用什么音源"。
@@ -73,16 +74,43 @@ class RuntimeProvider : ContentProvider() {
                 val sampleRate = extras?.getInt("sample_rate") ?: 0
                 val channels = extras?.getInt("channels") ?: 0
                 val prefs = context?.getSharedPreferences(Constants.AUDIO_STATS_PREFS, Context.MODE_PRIVATE)
-                val oldReads = prefs?.getLong(Constants.AUDIO_STATS_TOTAL_READS, 0L) ?: 0L
-                val oldBytes = prefs?.getLong(Constants.AUDIO_STATS_TOTAL_BYTES, 0L) ?: 0L
-                prefs?.edit()
-                    ?.putLong(Constants.AUDIO_STATS_TOTAL_READS, oldReads + deltaReads)
-                    ?.putLong(Constants.AUDIO_STATS_TOTAL_BYTES, oldBytes + deltaBytes)
-                    ?.putLong(Constants.AUDIO_STATS_LAST_INTERCEPT, now)
-                    ?.putString(Constants.AUDIO_STATS_LAST_PACKAGE, pkg)
-                    ?.putInt(Constants.AUDIO_STATS_LAST_SAMPLE_RATE, sampleRate)
-                    ?.putInt(Constants.AUDIO_STATS_LAST_CHANNELS, channels)
-                    ?.apply()
+                // Binder 可并发上报；累计计数与 native 快照必须一起更新。
+                synchronized(statsLock) {
+                    val oldReads = prefs?.getLong(Constants.AUDIO_STATS_TOTAL_READS, 0L) ?: 0L
+                    val oldBytes = prefs?.getLong(Constants.AUDIO_STATS_TOTAL_BYTES, 0L) ?: 0L
+                    val editor = prefs?.edit()
+                        ?.putLong(Constants.AUDIO_STATS_TOTAL_READS, oldReads + deltaReads)
+                        ?.putLong(Constants.AUDIO_STATS_TOTAL_BYTES, oldBytes + deltaBytes)
+                        ?.putLong(Constants.AUDIO_STATS_LAST_INTERCEPT, now)
+                        ?.putString(Constants.AUDIO_STATS_LAST_PACKAGE, pkg)
+                        ?.putInt(Constants.AUDIO_STATS_LAST_SAMPLE_RATE, sampleRate)
+                        ?.putInt(Constants.AUDIO_STATS_LAST_CHANNELS, channels)
+                    extras?.getBundle("native_stats")?.let { native ->
+                        // 保留最近有欠载的窗口，暂停/随后正常读取不会抹掉故障证据。
+                        val previous = runCatching {
+                            JSONObject(prefs?.getString(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS, null) ?: "{}")
+                        }.getOrElse { JSONObject() }
+                        val window = JSONObject().apply {
+                            put("time", now)
+                            put("package", pkg)
+                            put("path", native.getString("path") ?: "unknown")
+                            put("sample_rate", sampleRate)
+                            put("channels", channels)
+                            put("reads", deltaReads)
+                            put("source_bytes", deltaBytes)
+                            put("underrun_reads", native.getLong("underrun_reads"))
+                            put("missing_frames", native.getLong("missing_frames"))
+                            put("requested_frames", native.getLong("requested_frames"))
+                        }
+                        val lastUnderrun = if (native.getLong("underrun_reads") > 0) window
+                            else previous.optJSONObject("last_underrun")
+                        editor?.putString(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS, JSONObject().apply {
+                            put("latest", window)
+                            if (lastUnderrun != null) put("last_underrun", lastUnderrun)
+                        }.toString())
+                    }
+                    editor?.apply()
+                }
                 return Bundle().apply { putBoolean("ok", true) }
             }
         }
@@ -118,6 +146,7 @@ class RuntimeProvider : ContentProvider() {
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 
     private companion object {
+        private val statsLock = Any()
         @Volatile private var lastPingWrite = 0L
         private const val PING_WRITE_THROTTLE_MS = 3000L
     }

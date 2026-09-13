@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
+#include <numeric>
 #include <thread>
 #include <unistd.h>
 #include <pthread.h>
@@ -29,15 +30,19 @@ struct PcmFdState {
 static std::mutex g_fd_mutex;
 static PcmFdState g_fd_state;
 
-// 64KB SPSC 无锁环形缓冲区：解耦 IPC Pipe 读取与硬实时音频回调，提供充裕抗抖动弹性水位
+// 所有 ring 操作由 g_fd_mutex 串行化，避免切源 clear 与读写并发。
+// 音频线程只 try_lock；后台 pipe 使用非阻塞 fd，不能持锁等待生产者。
 static SpscRingBuffer<65536> g_ring_buffer;
-static std::atomic<int> g_worker_fd{-1};
 static std::atomic<bool> g_worker_running{false};
 
 static std::atomic<uint64_t> g_pending_reads{0};
 static std::atomic<uint64_t> g_pending_bytes{0};
 static std::atomic<int32_t> g_last_sr{0};
 static std::atomic<int32_t> g_last_ch{0};
+static std::atomic<uint64_t> g_pending_underruns{0};
+static std::atomic<uint64_t> g_pending_missing_frames{0};
+static std::atomic<uint64_t> g_pending_requested_frames{0};
+static std::atomic<int32_t> g_last_path{0};
 
 using AAudioStream_read_fn = aaudio_result_t(*)(AAudioStream*, void*, int32_t, int64_t);
 static AAudioStream_read_fn g_orig_AAudioStream_read = nullptr;
@@ -124,7 +129,7 @@ static inline float soft_limit_f(float sample) {
 
 /**
  * 转换 PCM 并写入目标 buffer：
- * 采用基于真实采样率映射的时间对齐与线性插值算法，不足部分填充舒适噪声，绝不发生音频时间拉伸变调。
+ * 按采样率映射线性插值，不足部分补零；不能把短读数据拉伸到整块目标时长。
  */
 static void convert_and_write(
     void* dst,
@@ -301,35 +306,17 @@ static void pcm_reader_worker_loop() {
     pthread_setname_np(pthread_self(), "GlassPcmWorker");
     uint8_t chunk[2048];
     while (g_worker_running.load(std::memory_order_relaxed)) {
-        int fd = g_worker_fd.load(std::memory_order_acquire);
-        if (fd < 0) {
-            usleep(10000); // 10ms
-            continue;
-        }
-
-        // 环形缓冲已满时短暂让出 CPU
-        if (g_ring_buffer.available_write() < sizeof(chunk)) {
-            usleep(1000); // 1ms
-            continue;
-        }
-
-        ssize_t r = ::read(fd, chunk, sizeof(chunk));
-        if (r > 0) {
-            size_t written = 0;
-            while (written < static_cast<size_t>(r) && g_worker_running.load(std::memory_order_relaxed)) {
-                size_t n = g_ring_buffer.write(chunk + written, static_cast<size_t>(r) - written);
-                written += n;
-                if (written < static_cast<size_t>(r)) {
-                    usleep(500); // 0.5ms
-                }
+        ssize_t r = -1;
+        {
+            std::lock_guard<std::mutex> lock(g_fd_mutex);
+            const int fd = g_fd_state.fd;
+            if (fd >= 0 && g_ring_buffer.available_write() >= sizeof(chunk)) {
+                r = ::read(fd, chunk, sizeof(chunk));
+                if (r > 0) g_ring_buffer.write(chunk, static_cast<size_t>(r));
             }
-        } else if (r == 0) {
-            // EOF: 生产者暂停或关闭
-            usleep(10000);
-        } else {
-            if (errno == EINTR) continue;
-            usleep(10000);
         }
+        // 不在持锁期间睡眠；也不会 close/reuse 一个仍在 read 的 fd。
+        if (r <= 0) usleep(1000);
     }
 }
 
@@ -355,7 +342,8 @@ static FillResult fill_pcm_impl(
     aaudio_format_t dst_fmt,
     int32_t dst_channels,
     int32_t dst_sample_rate,
-    int32_t numFrames
+    int32_t numFrames,
+    CapturePath path
 ) {
     if (!buffer || numFrames <= 0 || dst_channels <= 0) return FillResult::PASS;
 
@@ -363,6 +351,7 @@ static FillResult fill_pcm_impl(
     if (decision == Decision::REAL_MIC) return FillResult::PASS;
 
     if (dst_sample_rate <= 0) dst_sample_rate = 48'000;
+    g_last_path.store(static_cast<int32_t>(path), std::memory_order_relaxed);
 
     if (decision == Decision::SILENCE) {
         fill_comfort_noise(buffer, dst_fmt, dst_channels, numFrames);
@@ -373,47 +362,61 @@ static FillResult fill_pcm_impl(
         return FillResult::FILLED;
     }
 
-    // decision == FILE: 从 Lock-Free RingBuffer 零阻塞读取
+    // decision == FILE: 回调不得等待 worker / 切源线程持有的锁。
+    std::unique_lock<std::mutex> lock(g_fd_mutex, std::try_to_lock);
+    g_pending_requested_frames.fetch_add(numFrames, std::memory_order_relaxed);
     int32_t src_channels = 1;
     int32_t src_sample_rate = 48'000;
-    {
-        std::lock_guard<std::mutex> lock(g_fd_mutex);
+    if (lock.owns_lock()) {
         src_channels = g_fd_state.channels > 0 ? g_fd_state.channels : 1;
         src_sample_rate = g_fd_state.sample_rate > 0 ? g_fd_state.sample_rate : 48'000;
     }
 
-    int32_t need_src_frames = static_cast<int32_t>(
-        (static_cast<int64_t>(numFrames) * src_sample_rate + dst_sample_rate - 1) / dst_sample_rate
-    );
-    if (need_src_frames <= 0) need_src_frames = numFrames;
-
-    size_t need_bytes = static_cast<size_t>(need_src_frames * src_channels * 2);
-    if (need_bytes > 16384) need_bytes = 16384;
-
-    uint8_t tmp[16384];
-    size_t got = g_ring_buffer.read(tmp, need_bytes);
-
-    if (got == 0) {
-        // 短暂欠载（Pipe 延迟到达）：填充舒适噪声，不回退真麦，保持流平稳
-        fill_comfort_noise(buffer, dst_fmt, dst_channels, numFrames);
-        g_pending_reads.fetch_add(1, std::memory_order_relaxed);
-        g_last_sr.store(dst_sample_rate, std::memory_order_relaxed);
-        g_last_ch.store(dst_channels, std::memory_order_relaxed);
-        return FillResult::FILLED;
+    // 大请求分块转换，不能把超过栈缓冲容量的整段音频直接补零。
+    // 中间块按采样率公约数对齐，避免每块向上取整额外吞掉源帧。
+    int16_t tmp[8192];
+    const int32_t max_src_frames = 8192 / src_channels;
+    const int32_t quantum = dst_sample_rate / std::gcd(src_sample_rate, dst_sample_rate);
+    const int32_t max_dst_frames = static_cast<int32_t>(
+        static_cast<int64_t>(max_src_frames) * dst_sample_rate / src_sample_rate);
+    const int32_t block_frames = (max_dst_frames / quantum) * quantum;
+    uint64_t got = 0;
+    int32_t missing = 0;
+    int32_t offset = 0;
+    while (offset < numFrames) {
+        const int32_t count = std::min(numFrames - offset,
+            block_frames > 0 ? block_frames : max_dst_frames);
+        if (count <= 0) break;
+        const int32_t need = static_cast<int32_t>(
+            (static_cast<int64_t>(count) * src_sample_rate + dst_sample_rate - 1) / dst_sample_rate);
+        const size_t frame_bytes = static_cast<size_t>(src_channels) * 2;
+        size_t bytes = 0;
+        if (lock.owns_lock()) {
+            const size_t available = g_ring_buffer.available_read() / frame_bytes * frame_bytes;
+            bytes = g_ring_buffer.read(reinterpret_cast<uint8_t*>(tmp),
+                std::min(available, static_cast<size_t>(need) * frame_bytes));
+        }
+        const int32_t frames = static_cast<int32_t>(bytes / frame_bytes);
+        auto* dst = static_cast<uint8_t*>(buffer) +
+            static_cast<size_t>(offset) * dst_channels * bytes_per_dst_sample(dst_fmt);
+        convert_and_write(dst, dst_fmt, dst_channels, dst_sample_rate,
+            tmp, frames, src_channels, src_sample_rate, count);
+        const int32_t valid = static_cast<int32_t>(std::min<int64_t>(count,
+            static_cast<int64_t>(frames) * dst_sample_rate / src_sample_rate));
+        missing += count - valid;
+        got += bytes;
+        offset += count;
     }
-
-    int32_t got_frames = static_cast<int32_t>(got / (src_channels * 2));
-    convert_and_write(
-        buffer,
-        dst_fmt,
-        dst_channels,
-        dst_sample_rate,
-        reinterpret_cast<int16_t*>(tmp),
-        got_frames,
-        src_channels,
-        src_sample_rate,
-        numFrames
-    );
+    if (offset < numFrames) {
+        auto* dst = static_cast<uint8_t*>(buffer) +
+            static_cast<size_t>(offset) * dst_channels * bytes_per_dst_sample(dst_fmt);
+        std::memset(dst, 0, static_cast<size_t>(numFrames - offset) * dst_channels * bytes_per_dst_sample(dst_fmt));
+        missing += numFrames - offset;
+    }
+    if (missing > 0) {
+        g_pending_underruns.fetch_add(1, std::memory_order_relaxed);
+        g_pending_missing_frames.fetch_add(missing, std::memory_order_relaxed);
+    }
 
     g_pending_reads.fetch_add(1, std::memory_order_relaxed);
     g_pending_bytes.fetch_add(static_cast<uint64_t>(got), std::memory_order_relaxed);
@@ -422,22 +425,22 @@ static FillResult fill_pcm_impl(
     return FillResult::FILLED;
 }
 
-static FillResult fill_input_buffer(AAudioStream* stream, void* buffer, int32_t numFrames) {
+static FillResult fill_input_buffer(AAudioStream* stream, void* buffer, int32_t numFrames, CapturePath path) {
     if (!stream) return FillResult::PASS;
     int32_t ch = AAudioStream_getChannelCount(stream);
     if (ch <= 0) ch = 1;
     int32_t sr = AAudioStream_getSampleRate(stream);
     if (sr <= 0) sr = 48'000;
     aaudio_format_t fmt = AAudioStream_getFormat(stream);
-    return fill_pcm_impl(buffer, fmt, ch, sr, numFrames);
+    return fill_pcm_impl(buffer, fmt, ch, sr, numFrames, path);
 }
 
 // 导出给 OpenSL ES / AudioRecord 路径用
-bool fill_pcm(void* buffer, SampleFmt sf, int32_t channels, int32_t sample_rate, int32_t frames) {
+bool fill_pcm(void* buffer, SampleFmt sf, int32_t channels, int32_t sample_rate, int32_t frames, CapturePath path) {
     aaudio_format_t fmt = (sf == SampleFmt::FLOAT)
         ? AAUDIO_FORMAT_PCM_FLOAT
         : AAUDIO_FORMAT_PCM_I16;
-    return fill_pcm_impl(buffer, fmt, channels, sample_rate, frames) == FillResult::FILLED;
+    return fill_pcm_impl(buffer, fmt, channels, sample_rate, frames, path) == FillResult::FILLED;
 }
 
 // =================== 阻塞 read 路径 ===================
@@ -456,10 +459,14 @@ static aaudio_result_t my_AAudioStream_read(
         return g_orig_AAudioStream_read(stream, buffer, numFrames, timeoutNanos);
     }
 
-    if (fill_input_buffer(stream, buffer, numFrames) == FillResult::FILLED) {
-        return numFrames;
-    }
-    return g_orig_AAudioStream_read(stream, buffer, numFrames, timeoutNanos);
+    // 保留系统录音时钟、超时、短读和错误语义，只覆盖实际返回的帧。
+    // 否则紧循环会耗尽实时 PCM，并把大量补零帧发送给语音引擎。
+    const bool was_reading = aaudio_read_in_progress;
+    aaudio_read_in_progress = true;
+    const aaudio_result_t frames = g_orig_AAudioStream_read(stream, buffer, numFrames, timeoutNanos);
+    aaudio_read_in_progress = was_reading;
+    if (frames > 0) fill_input_buffer(stream, buffer, frames, CapturePath::AAUDIO_READ);
+    return frames;
 }
 
 // =================== data-callback 路径 ===================
@@ -479,7 +486,7 @@ static aaudio_data_callback_result_t my_data_callback(
 
     if (stream && audioData && numFrames > 0 &&
         AAudioStream_getDirection(stream) == AAUDIO_DIRECTION_INPUT) {
-        fill_input_buffer(stream, audioData, numFrames);
+        fill_input_buffer(stream, audioData, numFrames, CapturePath::AAUDIO_CALLBACK);
     }
 
     if (w && w->orig_cb) {
@@ -542,6 +549,7 @@ bool install_aaudio_hook() {
 }
 
 void set_decision(Decision decision) {
+    std::lock_guard<std::mutex> lock(g_fd_mutex);
     int32_t new_d = static_cast<int32_t>(decision);
     int32_t old_d = g_decision.exchange(new_d, std::memory_order_relaxed);
     if (old_d != new_d) {
@@ -555,6 +563,14 @@ Decision get_decision() {
 }
 
 void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels) {
+    if (fd >= 0) {
+        const int flags = fcntl(fd, F_GETFL);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            LOGW("cannot make PCM fd nonblocking: %s", strerror(errno));
+            ::close(fd);
+            fd = -1;
+        }
+    }
     if (fd >= 0) {
 #if defined(F_SETPIPE_SZ)
         int ret = fcntl(fd, F_SETPIPE_SZ, 8192);
@@ -573,13 +589,8 @@ void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels) {
         g_fd_state.fd = fd;
         g_fd_state.sample_rate = sample_rate;
         g_fd_state.channels = channels > 0 ? channels : 1;
-    }
-
-    g_ring_buffer.clear();
-    g_worker_fd.store(fd, std::memory_order_release);
-
-    if (old_fd >= 0 && old_fd != fd) {
-        ::close(old_fd);
+        g_ring_buffer.clear();
+        if (old_fd >= 0 && old_fd != fd) ::close(old_fd);
     }
     ensure_worker_started();
     LOGI("set_pcm_fd fd=%d sr=%d ch=%d (ring buffer cleared)", fd, sample_rate, channels);
@@ -589,12 +600,20 @@ void drain_stats(
     uint64_t* out_reads,
     uint64_t* out_bytes,
     int32_t* out_last_sr,
-    int32_t* out_last_ch
+    int32_t* out_last_ch,
+    uint64_t* out_underruns,
+    uint64_t* out_missing_frames,
+    uint64_t* out_requested_frames,
+    int32_t* out_path
 ) {
     if (out_reads) *out_reads = g_pending_reads.exchange(0, std::memory_order_relaxed);
     if (out_bytes) *out_bytes = g_pending_bytes.exchange(0, std::memory_order_relaxed);
     if (out_last_sr) *out_last_sr = g_last_sr.load(std::memory_order_relaxed);
     if (out_last_ch) *out_last_ch = g_last_ch.load(std::memory_order_relaxed);
+    if (out_underruns) *out_underruns = g_pending_underruns.exchange(0, std::memory_order_relaxed);
+    if (out_missing_frames) *out_missing_frames = g_pending_missing_frames.exchange(0, std::memory_order_relaxed);
+    if (out_requested_frames) *out_requested_frames = g_pending_requested_frames.exchange(0, std::memory_order_relaxed);
+    if (out_path) *out_path = g_last_path.load(std::memory_order_relaxed);
 }
 
 } // namespace glass

@@ -53,6 +53,8 @@ class AudioStatsRepository @Inject constructor(
         lastChannels = prefs.getInt(Constants.AUDIO_STATS_LAST_CHANNELS, 0)
     )
 
+    fun nativeDiagnostics(): String? = prefs.getString(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS, null)
+
     fun reset() {
         prefs.edit()
             .remove(Constants.AUDIO_STATS_TOTAL_READS)
@@ -61,6 +63,7 @@ class AudioStatsRepository @Inject constructor(
             .remove(Constants.AUDIO_STATS_LAST_PACKAGE)
             .remove(Constants.AUDIO_STATS_LAST_SAMPLE_RATE)
             .remove(Constants.AUDIO_STATS_LAST_CHANNELS)
+            .remove(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS)
             .apply()
     }
 }

@@ -83,10 +83,11 @@ object XBridge {
         deltaReads: Int,
         deltaBytes: Long,
         sampleRate: Int,
-        channels: Int
+        channels: Int,
+        nativeDiagnostics: Bundle? = null
     ) {
-        if (deltaReads <= 0 || deltaBytes <= 0) return
-        reportInterceptStats(ctx, callerPackage, deltaReads, deltaBytes, sampleRate, channels)
+        if (deltaReads <= 0 || deltaBytes < 0) return
+        reportInterceptStats(ctx, callerPackage, deltaReads, deltaBytes, sampleRate, channels, nativeDiagnostics)
     }
 
     private fun reportInterceptStats(
@@ -95,7 +96,8 @@ object XBridge {
         deltaReads: Int,
         deltaBytes: Long,
         sampleRate: Int,
-        channels: Int
+        channels: Int,
+        nativeDiagnostics: Bundle? = null
     ) {
         runCatching {
             val extras = Bundle().apply {
@@ -105,6 +107,7 @@ object XBridge {
                 putLong("delta_bytes", deltaBytes)
                 putInt("sample_rate", sampleRate)
                 putInt("channels", channels)
+                if (nativeDiagnostics != null) putBundle("native_stats", nativeDiagnostics)
             }
             ctx.contentResolver.call(
                 Uri.parse("content://${Constants.PROVIDER_RUNTIME}"),
