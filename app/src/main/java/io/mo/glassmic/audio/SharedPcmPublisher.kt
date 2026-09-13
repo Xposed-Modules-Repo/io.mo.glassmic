@@ -97,6 +97,7 @@ class SharedPcmPublisher @Inject constructor(
     @Volatile private var currentSource: AudioSourceProvider = SilenceSource
     @Volatile private var writerStarted = false
     @Volatile private var paused: Boolean = false
+    @Volatile private var completed: Boolean = false
     @Volatile private var effects = AudioEffects()
     // 仅在广播协程单线程访问，无需同步
     private val reverbLine = ReverbLine(REVERB_DELAY_SAMPLES)
@@ -134,6 +135,11 @@ class SharedPcmPublisher @Inject constructor(
     /** 暂停只影响"是否从 source 读取数据"，下游仍然收到等量静音，避免 pipe 阻塞/EOF。 */
     fun setPaused(value: Boolean) {
         if (paused == value) return
+        if (!value && completed) {
+            // EOF 时音源已回到开头；用户主动播放才更新进度并恢复读取。
+            runtime.setPosition(currentSource.positionMs())
+            completed = false
+        }
         paused = value
         if (value) {
             monitorPlayer.pauseAndFlush()
@@ -152,6 +158,7 @@ class SharedPcmPublisher @Inject constructor(
             is BufferedPcmSource -> src.seekTo(positionMs)
             else -> return
         }
+        completed = false
         runtime.setPosition(positionMs)
     }
 
@@ -222,6 +229,7 @@ class SharedPcmPublisher @Inject constructor(
         flushConsumers()
         currentSource.release()
         currentSource = src
+        completed = false
         if (updateRuntime) {
             runtime.setSource(
                 type = src.type,
@@ -264,7 +272,11 @@ class SharedPcmPublisher @Inject constructor(
 
                 // 暂停 → 读舒适噪声源（不动真实源的位置，但保持下游有本底信号，避免录音中断）；
                 // 其它情况读当前源
-                val readSource = if (paused) ComfortNoiseSource else currentSource
+                val readSource = when {
+                    paused && completed -> SilenceSource
+                    paused -> ComfortNoiseSource
+                    else -> currentSource
+                }
 
                 val n = runCatching { readSource.read(frame, sr, ch) }.getOrElse {
                     watchdog.onAudioEngineFailure()
@@ -293,7 +305,7 @@ class SharedPcmPublisher @Inject constructor(
                     }
                     n == -1 -> {
                         monitorPlayer.pauseAndFlush()
-                        handleEof()
+                        handleEof(readSource)
                         nextSendAtNanos = System.nanoTime() - 80_000_000L
                     }
                     else -> {
@@ -305,11 +317,21 @@ class SharedPcmPublisher @Inject constructor(
         }
     }
 
-    private suspend fun handleEof() = mutex.withLock {
+    private suspend fun handleEof(endedSource: AudioSourceProvider) = mutex.withLock {
         val policy = configStore.current().playbackPolicy.toCore()
+        // 读取配置期间可能已经换曲，旧音源的 EOF 不能影响新音源。
+        if (currentSource !== endedSource) return@withLock
         when (policy) {
             PlaybackPolicy.LOOP -> currentSource.reset()
-            PlaybackPolicy.SILENCE -> setSource(SilenceSource)
+            PlaybackPolicy.SILENCE -> {
+                // 保留选曲与时长，让播放按钮可直接重播；等待期间继续向 pipe 发静音。
+                val endPositionMs = endedSource.durationMs().takeIf { it > 0L }
+                    ?: endedSource.positionMs()
+                endedSource.reset()
+                completed = true
+                setPaused(true)
+                runtime.setPosition(endPositionMs)
+            }
             PlaybackPolicy.REAL_MIC -> {
                 // 对外状态切回真实麦；关闭现有 pipe，避免继续向无人读取的 fd 写静音。
                 runtime.setSource(SourceType.REAL_MIC)
