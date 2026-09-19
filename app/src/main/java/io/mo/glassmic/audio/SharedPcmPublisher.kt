@@ -26,6 +26,8 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -56,7 +58,10 @@ class SharedPcmPublisher @Inject constructor(
         val fd: ParcelFileDescriptor,
         val out: FileOutputStream,
         val queue: Channel<ByteArray>,
-        val converter: Pcm16Converter
+        val converter: Pcm16Converter,
+        val writtenBytes: AtomicLong = AtomicLong(),
+        val droppedBytes: AtomicLong = AtomicLong(),
+        val lastWriteMs: AtomicLong = AtomicLong()
     )
 
     private data class AudioEffects(
@@ -71,6 +76,9 @@ class SharedPcmPublisher @Inject constructor(
 
     private val consumers = ConcurrentHashMap<String, Consumer>()
     private val consumerSeq = AtomicLong(0L)
+    private val totalDroppedBytes = AtomicLong()
+    private val writeFailures = AtomicLong()
+    @Volatile private var lastBroadcastMs = 0L
     private val mutex = Mutex()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -133,7 +141,9 @@ class SharedPcmPublisher @Inject constructor(
     val playingBufferedPcm: Boolean get() = currentSource is BufferedPcmSource
 
     /** 暂停只影响"是否从 source 读取数据"，下游仍然收到等量静音，避免 pipe 阻塞/EOF。 */
-    fun setPaused(value: Boolean) {
+    fun setPaused(value: Boolean) = updatePaused(value, flushQueuedAudio = true)
+
+    private fun updatePaused(value: Boolean, flushQueuedAudio: Boolean) {
         if (paused == value) return
         if (!value && completed) {
             // EOF 时音源已回到开头；用户主动播放才更新进度并恢复读取。
@@ -144,7 +154,7 @@ class SharedPcmPublisher @Inject constructor(
         if (value) {
             monitorPlayer.pauseAndFlush()
         }
-        flushConsumers()
+        if (flushQueuedAudio) flushConsumers()
         runtime.setPaused(value)
         runtime.setStreaming(if (value) false else consumers.isNotEmpty())
         GlassLog.b("Publisher") { "paused=$value" }
@@ -183,11 +193,8 @@ class SharedPcmPublisher @Inject constructor(
         }
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
-        // 队列深度扩容至 16 帧（~320ms），保障硬实时且彻底杜绝调度抖动引发的瞬时丢帧与爆音
-        val queue = Channel<ByteArray>(
-            capacity = 16,
-            onBufferOverflow = BufferOverflow.DROP_OLDEST
-        )
+        // ~320ms 抗调度抖动；溢出由 broadcast 显式处理并计数，不能静默丢片段。
+        val queue = Channel<ByteArray>(capacity = 16)
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
         val safeChannels = channels.coerceAtLeast(1)
         val consumer = Consumer(
@@ -306,7 +313,7 @@ class SharedPcmPublisher @Inject constructor(
                     n == -1 -> {
                         monitorPlayer.pauseAndFlush()
                         handleEof(readSource)
-                        nextSendAtNanos = System.nanoTime() - 80_000_000L
+                        // 延续时钟，避免 EOF 后突发补发静音挤掉队列中的尾音。
                     }
                     else -> {
                         monitorPlayer.pauseAndFlush()
@@ -329,7 +336,8 @@ class SharedPcmPublisher @Inject constructor(
                     ?: endedSource.positionMs()
                 endedSource.reset()
                 completed = true
-                setPaused(true)
+                // 正常 EOF 只停止取源；已广播的尾音必须排在后续静音之前送完。
+                updatePaused(true, flushQueuedAudio = false)
                 runtime.setPosition(endPositionMs)
             }
             PlaybackPolicy.REAL_MIC -> {
@@ -358,12 +366,20 @@ class SharedPcmPublisher @Inject constructor(
         consumers.values.forEach { c ->
             val payload = c.converter.convert(sourceData)
             if (payload.isEmpty()) return@forEach
-            val result = c.queue.trySend(payload)
+            var result = c.queue.trySend(payload)
+            if (result.isFailure && !result.isClosed) {
+                c.queue.tryReceive().getOrNull()?.let { dropped ->
+                    c.droppedBytes.addAndGet(dropped.size.toLong())
+                    totalDroppedBytes.addAndGet(dropped.size.toLong())
+                }
+                result = c.queue.trySend(payload)
+            }
             if (result.isFailure) {
                 GlassLog.b("Publisher") { "consumer ${c.id} 队列不可用，断开" }
                 detach(c.id)
             }
         }
+        lastBroadcastMs = System.currentTimeMillis()
         // 波形窗打开时才计算振幅，避免无谓开销
         if (_waveform.subscriptionCount.value > 0) {
             _waveform.tryEmit(downsample(sourceData, WAVEFORM_POINTS_PER_FRAME))
@@ -456,9 +472,11 @@ class SharedPcmPublisher @Inject constructor(
             try {
                 for (data in consumer.queue) {
                     consumer.out.write(data)
-                    consumer.out.flush()
+                    consumer.writtenBytes.addAndGet(data.size.toLong())
+                    consumer.lastWriteMs.set(System.currentTimeMillis())
                 }
             } catch (t: Throwable) {
+                writeFailures.incrementAndGet()
                 GlassLog.b("Publisher") { "consumer ${consumer.id} 写失败: ${t.message}" }
             } finally {
                 detach(consumer.id)
@@ -481,6 +499,29 @@ class SharedPcmPublisher @Inject constructor(
 
     private fun buildConsumerId(pkg: String): String =
         "$pkg-${android.os.Process.myPid()}-${consumerSeq.incrementAndGet()}"
+
+    /** 仅在导出时组装 JSON；保留本进程累计丢帧数，即便故障 consumer 已断开。 */
+    fun diagnostics(): JSONObject = JSONObject().apply {
+        put("captured_at", System.currentTimeMillis())
+        put("last_broadcast_ms", lastBroadcastMs)
+        put("paused", paused)
+        put("completed", completed)
+        put("total_dropped_bytes", totalDroppedBytes.get())
+        put("write_failures", writeFailures.get())
+        put("consumers", JSONArray().apply {
+            consumers.values.forEach { c ->
+                put(JSONObject().apply {
+                    put("id", c.id)
+                    put("package", c.pkg)
+                    put("sample_rate", c.sampleRate)
+                    put("channels", c.channels)
+                    put("written_bytes", c.writtenBytes.get())
+                    put("dropped_bytes", c.droppedBytes.get())
+                    put("last_write_ms", c.lastWriteMs.get())
+                })
+            }
+        })
+    }
 }
 
 private fun ProtoPolicy.toCore(): PlaybackPolicy = when (this) {

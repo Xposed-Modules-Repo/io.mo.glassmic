@@ -101,7 +101,7 @@ static ssize_t my_read(void* thiz, void* buffer, size_t size, bool blocking) {
     int32_t frame_bytes = ch * bps;
     int32_t frames = static_cast<int32_t>(n) / frame_bytes;
     if (frames > 0) {
-        fill_pcm(buffer, fmt, ch, sr, frames, CapturePath::AUDIORECORD);
+        fill_pcm(buffer, fmt, ch, sr, frames, CapturePath::AUDIORECORD, thiz);
     }
     return n;
 }

@@ -101,12 +101,16 @@ class RuntimeProvider : ContentProvider() {
                             put("underrun_reads", native.getLong("underrun_reads"))
                             put("missing_frames", native.getLong("missing_frames"))
                             put("requested_frames", native.getLong("requested_frames"))
+                            put("skipped_source_frames", native.getLong("skipped_source_frames"))
                         }
                         val lastUnderrun = if (native.getLong("underrun_reads") > 0) window
                             else previous.optJSONObject("last_underrun")
+                        val lastOverrun = if (native.getLong("skipped_source_frames") > 0) window
+                            else previous.optJSONObject("last_overrun")
                         editor?.putString(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS, JSONObject().apply {
                             put("latest", window)
                             if (lastUnderrun != null) put("last_underrun", lastUnderrun)
+                            if (lastOverrun != null) put("last_overrun", lastOverrun)
                         }.toString())
                     }
                     editor?.apply()

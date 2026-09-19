@@ -8,12 +8,16 @@
 
 using namespace glass;
 
-static void prepare(int frames, int channels = 1) {
+static void prepare(int frames, int channels = 1, const void* stream = nullptr) {
     set_decision(Decision::FILE);
-    std::lock_guard<std::mutex> lock(g_fd_mutex);
+    std::lock_guard<std::mutex> lock(g_buffer_mutex);
     g_fd_state.sample_rate = 48000;
     g_fd_state.channels = channels;
     g_ring_buffer.clear();
+    // Register before producing, so large fixtures model an already running stream.
+    uint8_t unused = 0;
+    for (int path = 1; path <= 4; ++path)
+        g_ring_buffer.read(&unused, 0, stream, path, channels * 2, 0);
     std::vector<int16_t> pcm(frames * channels);
     for (int f = 0; f < frames; ++f)
         for (int ch = 0; ch < channels; ++ch) pcm[f * channels + ch] = 1000 + f % 1000;
@@ -34,7 +38,7 @@ static void read_contract() {
     AAudioStream stream;
     g_orig_AAudioStream_read = system_read;
     for (int result : {0, -899, 120, 480}) {
-        prepare(480);
+        prepare(480, 1, &stream);
         readResult = result;
         std::vector<int16_t> out(481, -123);
         const int before = readCalls;
@@ -44,9 +48,9 @@ static void read_contract() {
         const int filled = std::max(result, 0);
         for (int i = 0; i < filled; ++i) assert(out[i] == 1000 + i);
         for (int i = filled; i <= 480; ++i) assert(out[i] == -123);
-        assert(g_ring_buffer.available_read() == static_cast<size_t>(480 - filled) * 2);
+        assert(g_ring_buffer.available_read(&stream, 1) == static_cast<size_t>(480 - filled) * 2);
     }
-    prepare(480);
+    prepare(480, 1, &stream);
     readResult = 480;
     int16_t out[480];
     const auto start = std::chrono::steady_clock::now();
@@ -74,7 +78,7 @@ static void large_buffers() {
                     assert(std::abs(out[f * channels + ch] - expected) <= 1);
             }
             assert(out.back() == -123);
-            assert(g_ring_buffer.available_read() == 0);
+            assert(g_ring_buffer.available_read(nullptr, 4) == 0);
         }
     }
     for (auto format : {AAUDIO_FORMAT_PCM_FLOAT, AAUDIO_FORMAT_PCM_I32, AAUDIO_FORMAT_PCM_I24_PACKED}) {
@@ -86,7 +90,7 @@ static void large_buffers() {
         assert(fill_pcm_impl(bytes, format, 1, 48000, 12000, CapturePath::AAUDIO_CALLBACK) == FillResult::FILLED);
         assert(bytes[12000 * bps] == 0x7e);
         assert(std::any_of(bytes + 10000 * bps, bytes + 12000 * bps, [](uint8_t v) { return v != 0; }));
-        assert(g_ring_buffer.available_read() == 0);
+        assert(g_ring_buffer.available_read(nullptr, 2) == 0);
     }
     std::cout << "PASS: 250 ms buffers, five rates, mono/stereo and four PCM formats\n";
 }
@@ -114,7 +118,7 @@ static void contention_and_reset() {
     prepare(480);
     std::atomic<bool> locked{false}, done{false};
     std::thread holder([&] {
-        std::lock_guard<std::mutex> lock(g_fd_mutex);
+        std::lock_guard<std::mutex> lock(g_buffer_mutex);
         locked.store(true);
         while (!done.load()) std::this_thread::yield();
     });
@@ -127,11 +131,11 @@ static void contention_and_reset() {
     holder.join();
     assert(elapsed < std::chrono::milliseconds(100));
     assert(std::all_of(out, out + 480, [](int16_t v) { return v == 0; }));
-    assert(g_ring_buffer.available_read() == 960);
+    assert(g_ring_buffer.available_read(nullptr, 4) == 960);
     std::thread writer([] {
         const uint8_t data[1920] = {};
         for (int i = 0; i < 3000; ++i) {
-            std::lock_guard<std::mutex> lock(g_fd_mutex);
+            std::lock_guard<std::mutex> lock(g_buffer_mutex);
             g_ring_buffer.write(data, sizeof(data));
         }
     });
@@ -143,12 +147,72 @@ static void contention_and_reset() {
     });
     for (int i = 0; i < 3000; ++i) {
         fill_pcm(out, SampleFmt::S16, 1, 48000, 480, CapturePath::OPENSL);
-        std::lock_guard<std::mutex> lock(g_fd_mutex);
-        assert(g_ring_buffer.available_read() <= 65536);
+        std::lock_guard<std::mutex> lock(g_buffer_mutex);
+        assert(g_ring_buffer.available_read(nullptr, 4) <= 65536);
     }
     writer.join();
     resetter.join();
     std::cout << "PASS: nonblocking contention and concurrent decision/reset/read/write\n";
+}
+
+static void simultaneous_recorders() {
+    prepare(960);
+    AAudioStream voice, background;
+    int16_t first[480], second[480], opensl[160];
+    for (int block = 0; block < 2; ++block) {
+        assert(fill_input_buffer(&voice, first, 480, CapturePath::AAUDIO_CALLBACK) == FillResult::FILLED);
+        assert(fill_input_buffer(&background, second, 480, CapturePath::AAUDIO_CALLBACK) == FillResult::FILLED);
+        assert(fill_pcm(opensl, SampleFmt::S16, 1, 16000, 160, CapturePath::OPENSL));
+        for (int i = 0; i < 480; ++i) {
+            assert(first[i] == 1000 + block * 480 + i);
+            assert(second[i] == first[i]);
+        }
+        for (int i = 0; i < 160; ++i) assert(opensl[i] == first[i * 3]);
+    }
+    // A new recorder's first request can exceed the normal 80 ms join window.
+    prepare(12000);
+    std::vector<int16_t> large(12000);
+    assert(fill_input_buffer(&voice, large.data(), 12000, CapturePath::AAUDIO_READ) == FillResult::FILLED);
+    for (int i = 0; i < 12000; ++i) assert(large[i] == 1000 + i % 1000);
+    // A pipe syscall/close in the worker must not silence a callback with buffered PCM.
+    prepare(480);
+    std::lock_guard<std::mutex> fd_lock(g_fd_mutex);
+    fill_pcm(first, SampleFmt::S16, 1, 48000, 480, CapturePath::OPENSL);
+    for (int i = 0; i < 480; ++i) assert(first[i] == 1000 + i);
+    std::cout << "PASS: independent same-path streams, mixed APIs/rates and fd-lock isolation\n";
+}
+
+static void broadcast_history() {
+    PcmBroadcastBuffer<64, 4> history;
+    int fast, slow, newcomer;
+    uint8_t input[48], out[48];
+    for (int i = 0; i < 48; ++i) input[i] = static_cast<uint8_t>(i);
+    history.write(input, 48);
+    assert(history.read(out, 24, &fast, 1, 2, 48) == 24);
+    assert(std::equal(out, out + 24, input));
+    assert(history.read(out, 12, &slow, 1, 2, 48) == 12);
+    history.write(input, 48); // wrap and overwrite the stopped reader's position
+    uint64_t skipped = 0;
+    assert(history.read(out, 24, &slow, 1, 2, 24, &skipped) == 24);
+    assert(skipped == 60);
+    assert(std::equal(out, out + 24, input + 24));
+    assert(history.read(out, 24, &newcomer, 1, 2, 24) == 24);
+    assert(std::equal(out, out + 24, input + 24));
+    history.clear();
+    assert(history.read(out, 48, &fast, 1, 2, 48) == 0);
+    // Byte-sized pipe reads must not split a multi-channel PCM frame.
+    history.write(input, 5);
+    assert(history.read(out, 48, &fast, 1, 6, 48) == 0);
+    history.write(input + 5, 7);
+    assert(history.read(out, 48, &fast, 1, 6, 48) == 12);
+    assert(std::equal(out, out + 12, input));
+    // More historical identities than slots must remain bounded and reuse slots.
+    int identities[100];
+    for (auto& identity : identities) {
+        assert(history.read(out, 12, &identity, 1, 6, 48) == 12);
+        assert(std::equal(out, out + 12, input));
+    }
+    std::cout << "PASS: bounded history, wraparound, slow/new readers, reset and frame alignment\n";
 }
 
 int main() {
@@ -156,4 +220,6 @@ int main() {
     large_buffers();
     underruns();
     contention_and_reset();
+    simultaneous_recorders();
+    broadcast_history();
 }

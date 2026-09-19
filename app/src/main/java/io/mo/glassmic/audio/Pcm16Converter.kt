@@ -138,6 +138,8 @@ internal class Pcm16Converter(
         val estimatedOutFrames = ((totalSourceFrames - filterTaps - sourceCursor) / ratio).toInt().coerceAtLeast(0) + 16
         val outChannelsData = Array(targetChannels) { FloatArray(estimatedOutFrames) }
         var outFrameCount = 0
+        // 每个输出样本复用工作区，避免 48kHz 转换时每秒分配 48,000 个数组。
+        val filteredSource = FloatArray(sourceChannels)
 
         // 只要游标加上滤波半窗仍在有效历史范围内，就可以持续产生目标帧
         while (true) {
@@ -158,7 +160,6 @@ internal class Pcm16Converter(
             }
 
             // 逐个源通道计算滤波与亚样本插值后的值
-            val filteredSource = FloatArray(sourceChannels)
             val frac = (sourceCursor - centerIndex).toFloat()
 
             for (ch in 0 until sourceChannels) {

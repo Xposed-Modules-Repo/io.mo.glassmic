@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.Lazy
+import io.mo.glassmic.audio.SharedPcmPublisher
 import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.config.ConfigStore
@@ -51,7 +53,8 @@ class DiagnosticBundler @Inject constructor(
     private val sourceResolver: EffectiveSourceResolver,
     private val fairMemory: FairMemoryController,
     private val visibilityCompatRepo: VisibilityCompatRepository,
-    private val audioDao: AudioDao
+    private val audioDao: AudioDao,
+    private val publisher: Lazy<SharedPcmPublisher>
 ) {
 
     suspend fun export(): File = withContext(Dispatchers.IO) {
@@ -65,6 +68,7 @@ class DiagnosticBundler @Inject constructor(
             writeEntry(zip, "safe_mode.json", buildSafeMode())
             writeEntry(zip, "hook_status.json", buildHook())
             writeEntry(zip, "audio_stats.json", buildAudioStats())
+            writeEntry(zip, "publisher_stats.json", publisher.get().diagnostics().toString(2))
             writeEntry(zip, "decisions.json", buildDecisions())
             writeEntry(zip, "memory.json", buildMemory())
         }
@@ -177,6 +181,8 @@ class DiagnosticBundler @Inject constructor(
             put("total_reads", s.totalReads)
             put("total_bytes", s.totalBytes)
             put("last_intercept_ms", s.lastInterceptMs)
+            put("last_intercept_age_ms", if (s.lastInterceptMs > 0L)
+                (System.currentTimeMillis() - s.lastInterceptMs).coerceAtLeast(0L) else JSONObject.NULL)
             put("last_package", s.lastPackage ?: "")
             put("last_sample_rate", s.lastSampleRate)
             put("last_channels", s.lastChannels)

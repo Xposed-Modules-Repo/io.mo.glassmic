@@ -122,6 +122,7 @@ object NativeAAudioHook {
                                 putLong("underrun_reads", stats[4])
                                 putLong("missing_frames", stats[5])
                                 putLong("requested_frames", stats[6])
+                                putLong("skipped_source_frames", stats.getOrElse(8) { 0L })
                                 putString("path", when (stats[7].toInt()) {
                                     1 -> "AAudio.read"
                                     2 -> "AAudio.callback"

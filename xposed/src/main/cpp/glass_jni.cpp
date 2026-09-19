@@ -65,7 +65,7 @@ Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeDupFd(JNIEnv* env, jclass, job
 }
 
 /**
- * 返回 long[8]：读取次数、源字节数、目标采样率/声道、欠载次数、缺失帧、请求帧、接口。
+ * 返回 long[9]：读取次数、源字节数、目标采样率/声道、欠载次数、缺失帧、请求帧、接口、追帧时丢弃的源帧。
  */
 JNIEXPORT jlongArray JNICALL
 Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeDrainStats(JNIEnv* env, jclass) {
@@ -73,9 +73,10 @@ Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeDrainStats(JNIEnv* env, jclass
     int32_t  sr = 0, ch = 0;
     uint64_t underruns = 0, missing = 0, requested = 0;
     int32_t path = 0;
-    drain_stats(&reads, &bytes, &sr, &ch, &underruns, &missing, &requested, &path);
+    uint64_t skipped = 0;
+    drain_stats(&reads, &bytes, &sr, &ch, &underruns, &missing, &requested, &path, &skipped);
 
-    jlong out[8];
+    jlong out[9];
     out[0] = static_cast<jlong>(reads);
     out[1] = static_cast<jlong>(bytes);
     out[2] = static_cast<jlong>(sr);
@@ -84,10 +85,11 @@ Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeDrainStats(JNIEnv* env, jclass
     out[5] = static_cast<jlong>(missing);
     out[6] = static_cast<jlong>(requested);
     out[7] = static_cast<jlong>(path);
+    out[8] = static_cast<jlong>(skipped);
 
-    jlongArray arr = env->NewLongArray(8);
+    jlongArray arr = env->NewLongArray(9);
     if (!arr) return nullptr;
-    env->SetLongArrayRegion(arr, 0, 8, out);
+    env->SetLongArrayRegion(arr, 0, 9, out);
     return arr;
 }
 

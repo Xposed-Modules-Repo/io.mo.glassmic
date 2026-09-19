@@ -37,7 +37,7 @@ inline thread_local bool aaudio_read_in_progress = false;
  * 返回 true 表示已用虚拟数据覆盖 buffer；false 表示当前应放行真实麦克风
  * （REAL_MIC）。FILE 欠载时补零并记录缺失帧。
  */
-bool fill_pcm(void* buffer, SampleFmt fmt, int32_t channels, int32_t sample_rate, int32_t frames, CapturePath path);
+bool fill_pcm(void* buffer, SampleFmt fmt, int32_t channels, int32_t sample_rate, int32_t frames, CapturePath path, const void* stream_id = nullptr);
 
 /** 由 Kotlin 侧轮询线程定期推送当前决策。原子写。 */
 void set_decision(Decision d);
@@ -56,6 +56,7 @@ void set_pcm_fd(int fd, int32_t sample_rate, int32_t channels);
 void drain_stats(uint64_t* out_reads, uint64_t* out_bytes,
                  int32_t* out_last_sr, int32_t* out_last_ch,
                  uint64_t* out_underruns, uint64_t* out_missing_frames,
-                 uint64_t* out_requested_frames, int32_t* out_path);
+                 uint64_t* out_requested_frames, int32_t* out_path,
+                 uint64_t* out_skipped_source_frames = nullptr);
 
 } // namespace glass
