@@ -71,7 +71,8 @@ class SharedPcmPublisher @Inject constructor(
         val reverb: Boolean = false,
         val reverbAmount: Float = 0f,
         val speed: Boolean = false,
-        val speedFactor: Float = 1f
+        val speedFactor: Float = 1f,
+        val band: BandSettings = BandSettings()
     )
 
     private val consumers = ConcurrentHashMap<String, Consumer>()
@@ -109,6 +110,17 @@ class SharedPcmPublisher @Inject constructor(
     @Volatile private var effects = AudioEffects()
     // 仅在广播协程单线程访问，无需同步
     private val reverbLine = ReverbLine(REVERB_DELAY_SAMPLES)
+    private val bandFilter = StreamingBandFilter()
+    private val effectsEpoch = AtomicLong()
+    private var appliedEffectsEpoch = -1L
+    private var processedSamples = 0L
+    private var overRangeSamples = 0L
+    private data class OutputLevels(
+        val inputRms: Double = 0.0, val outputRms: Double = 0.0,
+        val peak: Int = 0, val samples: Long = 0, val overRange: Long = 0,
+        val time: Long = 0
+    )
+    @Volatile private var outputLevels = OutputLevels()
 
     init {
         scope.launch {
@@ -122,7 +134,8 @@ class SharedPcmPublisher @Inject constructor(
                     reverb = exp.unlocked && exp.reverbEnabled,
                     reverbAmount = exp.reverbAmount.coerceIn(0f, 1f),
                     speed = exp.unlocked && exp.speedEnabled && speedRaw != 1f,
-                    speedFactor = speedRaw
+                    speedFactor = speedRaw,
+                    band = BandSettings.normalized(cfg.audioBand.enabled, cfg.audioBand.lowHz, cfg.audioBand.highHz)
                 )
                 val mon = cfg.audioMonitor
                 monitorPlayer.setEnabled(mon.enabled)
@@ -151,6 +164,7 @@ class SharedPcmPublisher @Inject constructor(
             completed = false
         }
         paused = value
+        effectsEpoch.incrementAndGet()
         if (value) {
             monitorPlayer.pauseAndFlush()
         }
@@ -170,6 +184,7 @@ class SharedPcmPublisher @Inject constructor(
         }
         completed = false
         runtime.setPosition(positionMs)
+        effectsEpoch.incrementAndGet()
     }
 
     /** 清空所有 Consumer 队列中的残留数据并重置重采样状态，实现即时切换/暂停/Seek */
@@ -236,6 +251,7 @@ class SharedPcmPublisher @Inject constructor(
         flushConsumers()
         currentSource.release()
         currentSource = src
+        effectsEpoch.incrementAndGet()
         completed = false
         if (updateRuntime) {
             runtime.setSource(
@@ -279,6 +295,7 @@ class SharedPcmPublisher @Inject constructor(
 
                 // 暂停 → 读舒适噪声源（不动真实源的位置，但保持下游有本底信号，避免录音中断）；
                 // 其它情况读当前源
+                val readEffectsEpoch = effectsEpoch.get()
                 val readSource = when {
                     paused && completed -> SilenceSource
                     paused -> ComfortNoiseSource
@@ -297,7 +314,7 @@ class SharedPcmPublisher @Inject constructor(
                         if (!paused) runtime.setPosition(readSource.positionMs())
                         // 变速会改变实际广播的字节数——按广播出去的量节流，
                         // 才能让消费端以正常采样率播放时得到正确的变速节奏
-                        val outBytes = broadcast(frame)
+                        val outBytes = broadcast(frame, readEffectsEpoch)
 
                         val frameNanos = (outBytes.toLong() * 1_000_000_000L + bytesPerSec - 1) / bytesPerSec
                         nextSendAtNanos += frameNanos
@@ -329,7 +346,10 @@ class SharedPcmPublisher @Inject constructor(
         // 读取配置期间可能已经换曲，旧音源的 EOF 不能影响新音源。
         if (currentSource !== endedSource) return@withLock
         when (policy) {
-            PlaybackPolicy.LOOP -> currentSource.reset()
+            PlaybackPolicy.LOOP -> {
+                currentSource.reset()
+                effectsEpoch.incrementAndGet()
+            }
             PlaybackPolicy.SILENCE -> {
                 // 保留选曲与时长，让播放按钮可直接重播；等待期间继续向 pipe 发静音。
                 val endPositionMs = endedSource.durationMs().takeIf { it > 0L }
@@ -350,11 +370,11 @@ class SharedPcmPublisher @Inject constructor(
     }
 
     /** 返回实际广播出去的 master 字节数（变速后可能与输入不同）。 */
-    private fun broadcast(buf: ByteBuffer): Int {
+    private fun broadcast(buf: ByteBuffer, readEffectsEpoch: Long): Int {
         val data = ByteArray(buf.remaining())
         buf.get(data)
         val sourceData = if (!paused && (currentSource.type == SourceType.FILE || currentSource.type == SourceType.TTS)) {
-            applyEffects(data)
+            applyEffects(data, readEffectsEpoch)
         } else {
             data
         }
@@ -410,21 +430,28 @@ class SharedPcmPublisher @Inject constructor(
         return out
     }
 
-    private fun applyEffects(input: ByteArray): ByteArray {
+    private fun applyEffects(input: ByteArray, epoch: Long): ByteArray {
         val fx = effects
+        // Use the generation captured before reading: a concurrent seek/source switch must
+        // reset again for the next source, even if its generation changed during this read.
+        val reset = epoch != appliedEffectsEpoch
+        appliedEffectsEpoch = epoch
+        bandFilter.beginFrame(fx.band, reset)
         // 未启用混响时清空延迟线，避免下次开启时残留旧回声
-        if (!fx.reverb) reverbLine.reset()
+        if (!fx.reverb || reset) reverbLine.reset()
 
         // 变速（变速变调）：线性重采样，改变样本数量
         val data = if (fx.speed) resample(input, fx.speedFactor) else input
 
-        if (!fx.noiseSim && !fx.highGain && !fx.reverb) return data
-
+        var inputSquares = 0.0
+        var outputSquares = 0.0
+        var peak = 0
         var i = 0
         while (i + 1 < data.size) {
-            var mixed = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)).toShort().toInt()
+            var mixed = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)).toShort().toFloat()
+            inputSquares += mixed.toDouble() * mixed
             if (fx.highGain) {
-                mixed = (mixed * HIGH_GAIN_MULTIPLIER).toInt()
+                mixed *= HIGH_GAIN_MULTIPLIER
             }
             if (fx.noiseSim) {
                 mixed += Random.nextInt(-NOISE_SIM_AMPLITUDE, NOISE_SIM_AMPLITUDE + 1)
@@ -432,11 +459,23 @@ class SharedPcmPublisher @Inject constructor(
             if (fx.reverb) {
                 mixed = reverbLine.process(mixed, fx.reverbAmount)
             }
-            val clipped = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            mixed = bandFilter.process(mixed)
+            if (mixed > Short.MAX_VALUE || mixed < Short.MIN_VALUE) overRangeSamples++
+            val clipped = PcmOutputLimiter.apply(mixed, fx.limiterEnabled)
+            peak = maxOf(peak, kotlin.math.abs(clipped))
+            outputSquares += clipped.toDouble() * clipped
             data[i] = (clipped and 0xFF).toByte()
             data[i + 1] = ((clipped ushr 8) and 0xFF).toByte()
             i += 2
         }
+        val count = data.size / 2
+        processedSamples += count
+        outputLevels = OutputLevels(
+            inputRms = if (count > 0) kotlin.math.sqrt(inputSquares / count) else 0.0,
+            outputRms = if (count > 0) kotlin.math.sqrt(outputSquares / count) else 0.0,
+            peak = peak, samples = processedSamples, overRange = overRangeSamples,
+            time = System.currentTimeMillis()
+        )
         return data
     }
 
@@ -508,6 +547,22 @@ class SharedPcmPublisher @Inject constructor(
         put("completed", completed)
         put("total_dropped_bytes", totalDroppedBytes.get())
         put("write_failures", writeFailures.get())
+        val fx = effects
+        put("audio_band", JSONObject().apply {
+            put("enabled", fx.band.enabled)
+            put("low_hz", fx.band.lowHz)
+            put("high_hz", fx.band.highHz)
+            put("limiter_enabled", fx.limiterEnabled)
+        })
+        val levels = outputLevels
+        put("master_levels", JSONObject().apply {
+            put("time", levels.time)
+            put("input_rms_pcm16", levels.inputRms)
+            put("output_rms_pcm16", levels.outputRms)
+            put("output_peak_pcm16", levels.peak)
+            put("processed_samples", levels.samples)
+            put("pre_limiter_over_range_samples", levels.overRange)
+        })
         put("consumers", JSONArray().apply {
             consumers.values.forEach { c ->
                 put(JSONObject().apply {
@@ -533,21 +588,19 @@ private fun ProtoPolicy.toCore(): PlaybackPolicy = when (this) {
 
 /** 单抽头反馈延迟线，产生简单混响。仅在广播协程单线程访问。 */
 private class ReverbLine(size: Int) {
-    private val buf = ShortArray(size)
+    private val buf = FloatArray(size)
     private var idx = 0
 
     fun reset() {
-        buf.fill(0)
+        buf.fill(0f)
         idx = 0
     }
 
     /** amount 0..1：控制湿信号比例与反馈量。返回叠加后的样本（未限幅，由调用方裁剪）。 */
-    fun process(input: Int, amount: Float): Int {
-        val delayed = buf[idx].toInt()
-        val out = input + (delayed * amount).toInt()
-        val feedback = (input + delayed * amount * 0.6f).toInt()
-            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        buf[idx] = feedback.toShort()
+    fun process(input: Float, amount: Float): Float {
+        val delayed = buf[idx]
+        val out = input + delayed * amount
+        buf[idx] = input + delayed * amount * 0.6f
         idx++
         if (idx >= buf.size) idx = 0
         return out

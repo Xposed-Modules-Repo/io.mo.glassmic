@@ -244,8 +244,8 @@
     <string name="settings_exp_stress">音频压力测试</string>
     <string name="settings_exp_high_gain">高增益</string>
     <string name="settings_exp_noise">噪声环境模拟</string>
-    <string name="settings_exp_limiter">自动限幅保护</string>
-    <string name="settings_exp_limiter_hint">关闭可能导致削波，强烈建议保留</string>
+    <string name="settings_exp_limiter">输出软限幅保护</string>
+    <string name="settings_exp_limiter_hint">平滑压缩音效输出峰值，建议开启。关闭后仍保留格式转换保护，但可能发生削波。</string>
     <string name="settings_exp_reverb">混响</string>
     <string name="settings_exp_reverb_hint">为音源叠加空间回声</string>
     <string name="settings_exp_reverb_amount">混响强度</string>
@@ -353,4 +353,17 @@
     <string name="settings_audio_monitor_enabled_hint">在虚拟麦克风推流时，同步通过耳机/扬声器播放当前替换的音源内容</string>
     <string name="settings_audio_monitor_volume">耳返监听音量</string>
 
+    <string name="settings_band_title">音频频段</string>
+    <string name="settings_band_enabled">启用频段滤波</string>
+    <string name="settings_band_hint">对文件和 TTS 全局生效。会改变音色，不能保证消除目标软件的降噪影响。</string>
+    <string name="settings_band_preset">频段预设</string>
+    <string name="settings_band_original">原声（关闭滤波）</string>
+    <string name="settings_band_wide">宽频语音 · 100–8000 Hz</string>
+    <string name="settings_band_narrow">窄频语音 · 300–3400 Hz</string>
+    <string name="settings_band_custom">自定义</string>
+    <string name="settings_band_low">最低保留频率</string>
+    <string name="settings_band_high">最高保留频率</string>
+    <string name="settings_band_invalid">请输入 20–20000 Hz 的整数，最低频率必须小于最高频率。</string>
+    <string name="settings_band_apply">应用输入的频率</string>
+    <string name="settings_band_preview_hint">滑动后松手生效；手动输入后点应用。可开启实时耳返对比音色。目标软件的采样率较低时，实际带宽也会降低。</string>
 </resources>

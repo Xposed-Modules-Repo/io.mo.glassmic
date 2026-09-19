@@ -244,8 +244,8 @@
     <string name="settings_exp_stress">Audio Stress Test</string>
     <string name="settings_exp_high_gain">High Gain</string>
     <string name="settings_exp_noise">Noise Environment Simulation</string>
-    <string name="settings_exp_limiter">Auto Limiter Protection</string>
-    <string name="settings_exp_limiter_hint">Turning this off may cause clipping — strongly recommended to keep it on</string>
+    <string name="settings_exp_limiter">Output soft limiter</string>
+    <string name="settings_exp_limiter_hint">Smoothly compresses effect output peaks. Recommended. Format conversion safeguards remain active when off, but clipping may occur.</string>
     <string name="settings_exp_reverb">Reverb</string>
     <string name="settings_exp_reverb_hint">Adds spatial echo on top of the audio source</string>
     <string name="settings_exp_reverb_amount">Reverb Intensity</string>
@@ -353,4 +353,17 @@
     <string name="settings_audio_monitor_enabled_hint">Simultaneously plays replaced audio through headphones/speakers while virtual mic is streaming</string>
     <string name="settings_audio_monitor_volume">Monitor Volume</string>
 
+    <string name="settings_band_title">Audio frequency range</string>
+    <string name="settings_band_enabled">Enable frequency filter</string>
+    <string name="settings_band_hint">Applies globally to files and TTS. Changes the tone; may not prevent suppression by the receiving app.</string>
+    <string name="settings_band_preset">Preset</string>
+    <string name="settings_band_original">Original (filter off)</string>
+    <string name="settings_band_wide">Wide voice · 100–8000 Hz</string>
+    <string name="settings_band_narrow">Narrow voice · 300–3400 Hz</string>
+    <string name="settings_band_custom">Custom</string>
+    <string name="settings_band_low">Lowest retained frequency</string>
+    <string name="settings_band_high">Highest retained frequency</string>
+    <string name="settings_band_invalid">Enter whole numbers from 20 to 20000 Hz. The lower frequency must be less than the upper frequency.</string>
+    <string name="settings_band_apply">Apply entered frequencies</string>
+    <string name="settings_band_preview_hint">Release a slider to apply, or apply typed values with the button. Enable audio monitoring to compare the tone. A lower receiving sample rate also reduces the available bandwidth.</string>
 </resources>

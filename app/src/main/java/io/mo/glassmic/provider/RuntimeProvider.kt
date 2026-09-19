@@ -53,6 +53,37 @@ class RuntimeProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         when (method) {
+            Constants.METHOD_PCM_READ_STATS -> {
+                if (extras == null) return null
+                val pkg = callingPackage ?: arg ?: "unknown"
+                val prefs = context?.getSharedPreferences(Constants.AUDIO_STATS_PREFS, Context.MODE_PRIVATE)
+                synchronized(statsLock) {
+                    val previous = runCatching {
+                        JSONObject(prefs?.getString(Constants.AUDIO_STATS_PCM_DIAGNOSTICS, null) ?: "{}")
+                    }.getOrElse { JSONObject() }
+                    val window = JSONObject().apply {
+                        put("time", System.currentTimeMillis())
+                        put("package", pkg)
+                        put("pid", extras.getInt("pid"))
+                        put("reader_id", extras.getInt("reader_id"))
+                        put("sample_rate", extras.getInt("sample_rate"))
+                        put("channels", extras.getInt("channels"))
+                        put("path", "AudioRecord.pipe.PCM16")
+                        for (key in arrayOf("reads", "requested_pcm16_bytes", "source_pcm16_bytes",
+                            "zero_fill_pcm16_bytes", "short_reads", "errors")) put(key, extras.getLong(key))
+                        put("rms_pcm16", extras.getDouble("rms_pcm16"))
+                        put("peak_pcm16", extras.getInt("peak_pcm16"))
+                    }
+                    val lastShort = if (extras.getLong("short_reads") > 0) window else previous.optJSONObject("last_short_read")
+                    val lastError = if (extras.getLong("errors") > 0) window else previous.optJSONObject("last_error")
+                    prefs?.edit()?.putString(Constants.AUDIO_STATS_PCM_DIAGNOSTICS, JSONObject().apply {
+                        put("latest", window)
+                        if (lastShort != null) put("last_short_read", lastShort)
+                        if (lastError != null) put("last_error", lastError)
+                    }.toString())?.apply()
+                }
+                return Bundle().apply { putBoolean("ok", true) }
+            }
             Constants.METHOD_XPOSED_PING -> {
                 val pkg = extras?.getString("package") ?: arg ?: callingPackage ?: "unknown"
                 val now = extras?.getLong("time")?.takeIf { it > 0L } ?: System.currentTimeMillis()

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.proto.AppConfig
+import io.mo.glassmic.audio.BandSettings
 import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.proto.FloatingSize
 import io.mo.glassmic.proto.PlaybackPolicy
@@ -187,6 +188,17 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ============ 实验功能 ============
+    fun setAudioBandEnabled(enabled: Boolean) = viewModelScope.launch {
+        configStore.update { it.setAudioBand(it.audioBand.toBuilder().setEnabled(enabled)) }
+    }
+
+    fun setAudioBand(lowHz: Int, highHz: Int) = viewModelScope.launch {
+        if (lowHz !in BandSettings.MIN_HZ until highHz || highHz > BandSettings.MAX_HZ) return@launch
+        configStore.update {
+            it.setAudioBand(it.audioBand.toBuilder().setEnabled(true).setLowHz(lowHz).setHighHz(highHz))
+        }
+    }
+
     fun setExperimentalUnlocked(unlocked: Boolean) = viewModelScope.launch {
         configStore.update { it.setExperimental(it.experimental.toBuilder().setUnlocked(unlocked)) }
     }

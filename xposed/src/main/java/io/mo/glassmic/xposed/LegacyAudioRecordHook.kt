@@ -2,6 +2,7 @@ package io.mo.glassmic.xposed
 
 import android.content.Context
 import android.media.AudioRecord
+import android.media.AudioFormat
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -56,13 +57,16 @@ object LegacyAudioRecordHook {
 
             val record = param.thisObject as AudioRecord
             if (src == SourceType.SILENCE) {
-                ComfortNoise.fillBytes(buf, offset, size)
+                if (record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) ComfortNoise.fillFloatBytes(buf, offset, size)
+                else ComfortNoise.fillBytes(buf, offset, size)
                 param.result = size
                 XBridge.recordInterception(appCtx, pkg, size, record.sampleRate, record.channelCount)
                 return@hook
             }
 
-            val n = obtainReader(appCtx, record).read(buf, offset, size)
+            val reader = obtainReader(appCtx, record)
+            val n = if (record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) reader.readFloatBytes(buf, offset, size)
+                else reader.read(buf, offset, size)
             if (n < 0) return@hook
             if (n < size) java.util.Arrays.fill(buf, offset + n, offset + size, 0.toByte())
             param.result = size
@@ -121,7 +125,7 @@ object LegacyAudioRecordHook {
             }
 
             val byteBuf = ByteArray(sizeInFloats * 4)
-            val n = obtainReader(appCtx, record).read(byteBuf, 0, byteBuf.size)
+            val n = obtainReader(appCtx, record).readFloatBytes(byteBuf, 0, byteBuf.size)
             if (n < 0) return@hook
             val bb = ByteBuffer.wrap(byteBuf).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
             val floatsRead = n / 4
@@ -146,14 +150,17 @@ object LegacyAudioRecordHook {
             val record = param.thisObject as AudioRecord
             val pos = buf.position()
             if (src == SourceType.SILENCE) {
-                ComfortNoise.putPcm16(buf, size)
+                if (record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) ComfortNoise.putFloat32(buf, size)
+                else ComfortNoise.putPcm16(buf, size)
                 buf.position(pos)
                 param.result = size
                 XBridge.recordInterception(appCtx, pkg, size, record.sampleRate, record.channelCount)
                 return@hook
             }
 
-            val n = obtainReader(appCtx, record).read(buf, size)
+            val reader = obtainReader(appCtx, record)
+            val n = if (record.audioFormat == AudioFormat.ENCODING_PCM_FLOAT) reader.readFloatBuffer(buf, size)
+                else reader.read(buf, size)
             if (n < 0) {
                 buf.position(pos)
                 return@hook

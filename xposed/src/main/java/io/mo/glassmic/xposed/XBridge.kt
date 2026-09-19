@@ -8,6 +8,9 @@ import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.SourceType
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * 注入到目标 App 进程后，只通过 GlassMic 自己的 ContentProvider 读取实时决策。
@@ -16,6 +19,16 @@ import java.util.concurrent.atomic.AtomicLong
  * 统一由 app 进程里的 EffectiveSourceResolver 计算，Xposed 侧只缓存短时间结果。
  */
 object XBridge {
+
+    // Diagnostics must not add Binder/disk latency to the target app's audio read thread.
+    // Bounded best-effort queue: a stalled provider cannot accumulate unbounded snapshots.
+    private val pcmReportExecutor by lazy {
+        ThreadPoolExecutor(
+            1, 1, 30L, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(8),
+            { task -> Thread(task, "GlassMic-PcmStats").apply { isDaemon = true } },
+            ThreadPoolExecutor.DiscardOldestPolicy()
+        ).apply { allowCoreThreadTimeOut(true) }
+    }
 
     private const val CACHE_TTL_MS = 200L
     // Provider 被禁用/不可达（= 前台服务未运行）时的回退缓存时长。
@@ -130,6 +143,20 @@ object XBridge {
         cachedAt = now
         cachedPkg = callerPackage
         return src
+    }
+
+    /** Pipe data metrics are separate from requested hook bytes (which may include zero padding). */
+    fun reportPcmReadStats(ctx: Context, stats: Bundle) {
+        runCatching {
+            pcmReportExecutor.execute {
+                runCatching {
+                    ctx.contentResolver.call(
+                        Uri.parse("content://${Constants.PROVIDER_RUNTIME}"),
+                        Constants.METHOD_PCM_READ_STATS, ctx.packageName, stats
+                    )
+                }
+            }
+        }
     }
 
     private fun queryProvider(cr: ContentResolver, pkg: String): SourceType {

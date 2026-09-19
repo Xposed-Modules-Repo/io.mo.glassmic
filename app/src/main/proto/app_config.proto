@@ -40,6 +40,15 @@ message AppConfig {
 
   // 实时耳返 / 音频监听配置
   AudioMonitor audio_monitor = 18;
+
+  // Global output filter, shared by imported audio and TTS. Disabled for existing installations.
+  AudioBand audio_band = 19;
+}
+
+message AudioBand {
+  bool enabled = 1;
+  int32 low_hz = 2;   // 20..19999 Hz; zero means 100 Hz
+  int32 high_hz = 3;  // low_hz < high_hz <= 20000; zero means 8000 Hz
 }
 
 // 实时耳返 / 本地监听播放：在虚拟麦克风推流时，同步通过扬声器/耳机输出声音

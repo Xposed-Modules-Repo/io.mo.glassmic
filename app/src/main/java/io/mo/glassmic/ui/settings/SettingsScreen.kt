@@ -261,6 +261,14 @@ fun SettingsScreen(
                 }
             } }
 
+            item {
+                AudioBandSection(
+                    config = cfg.audioBand,
+                    onEnabled = vm::setAudioBandEnabled,
+                    onBand = vm::setAudioBand
+                )
+            }
+
             item { Section(stringResource(R.string.settings_section_compat)) {
                 SwitchRow(
                     label = stringResource(R.string.settings_visibility_compat),

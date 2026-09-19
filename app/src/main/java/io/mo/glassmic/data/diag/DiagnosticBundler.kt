@@ -187,6 +187,7 @@ class DiagnosticBundler @Inject constructor(
             put("last_sample_rate", s.lastSampleRate)
             put("last_channels", s.lastChannels)
             audioStatsRepo.nativeDiagnostics()?.let { put("native_diagnostics", JSONObject(it)) }
+            audioStatsRepo.pcmReadDiagnostics()?.let { put("pcm_read_diagnostics", JSONObject(it)) }
         }.toString(2)
     }
 
