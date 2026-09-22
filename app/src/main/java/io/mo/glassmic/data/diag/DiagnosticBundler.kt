@@ -227,13 +227,20 @@ class DiagnosticBundler @Inject constructor(
 
         val nativeLatest = nativeRoot.optJSONObject("latest") ?: JSONObject()
         val nativeLastUnderrun = nativeRoot.optJSONObject("last_underrun")
-        val nativeGapInSession = nativeLastUnderrun != null &&
+        val nativeGapInSession = sessionStart > 0L &&
+            nativeLastUnderrun != null &&
             nativeLastUnderrun.optLong("time", 0L) >= sessionStart &&
             nativeLastUnderrun.optLong("missing_frames", 0L) > 0L
-        val skippedInLatest = nativeLatest.optLong("skipped_source_frames", 0L)
+        val skippedInLatest = if (
+            sessionStart > 0L && nativeLatest.optLong("time", 0L) >= sessionStart
+        ) {
+            nativeLatest.optLong("skipped_source_frames", 0L)
+        } else {
+            0L
+        }
 
         val pcmLatest = pcmRoot.optJSONObject("latest") ?: JSONObject()
-        val pcmInSession = pcmLatest.optLong("time", 0L) >= sessionStart
+        val pcmInSession = sessionStart > 0L && pcmLatest.optLong("time", 0L) >= sessionStart
         val pcmShortReads = if (pcmInSession) pcmLatest.optLong("short_reads", 0L) else 0L
         val pcmZeroFill = if (pcmInSession) pcmLatest.optLong("zero_fill_pcm16_bytes", 0L) else 0L
 
