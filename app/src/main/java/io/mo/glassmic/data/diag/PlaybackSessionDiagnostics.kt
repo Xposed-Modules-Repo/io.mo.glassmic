@@ -9,7 +9,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -112,9 +111,9 @@ class PlaybackSessionDiagnostics @Inject constructor(
             sampleLocked(force = true)
             collectorJob.also { collectorJob = null }
         }
-        if (job != null) {
-            scope.launch { job.cancelAndJoin() }
-        }
+        // cancel() 会立即阻止观察器继续处理后续状态；无需另起协程等待 join，
+        // 避免服务快速重启时旧观察器与新观察器短暂并存。
+        job?.cancel()
     }
 
     fun diagnostics(): JSONObject = synchronized(lock) {
@@ -272,7 +271,8 @@ class PlaybackSessionDiagnostics @Inject constructor(
     }
 
     private fun isPlaying(state: RuntimeState): Boolean =
-        !state.paused &&
+        state.enabled &&
+            !state.paused &&
             (state.currentSourceType == SourceType.FILE || state.currentSourceType == SourceType.TTS)
 
     private fun delta(current: Long, baseline: Long): Long =

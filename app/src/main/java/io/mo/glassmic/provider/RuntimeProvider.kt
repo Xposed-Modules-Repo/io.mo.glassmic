@@ -133,6 +133,8 @@ class RuntimeProvider : ContentProvider() {
                             put("missing_frames", native.getLong("missing_frames"))
                             put("requested_frames", native.getLong("requested_frames"))
                             put("skipped_source_frames", native.getLong("skipped_source_frames"))
+                            put("native_capture_age_ms", native.getLong("native_capture_age_ms", -1L))
+                            put("pcm_fd_active", native.getBoolean("pcm_fd_active", false))
                         }
                         val lastUnderrun = if (native.getLong("underrun_reads") > 0) window
                             else previous.optJSONObject("last_underrun")
