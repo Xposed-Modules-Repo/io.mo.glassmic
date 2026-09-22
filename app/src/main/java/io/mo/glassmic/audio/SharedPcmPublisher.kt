@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
@@ -528,7 +529,9 @@ class SharedPcmPublisher @Inject constructor(
         integrityExactZeroSamples.addAndGet(exactZeroSamples)
         if (count > 0 && outputRms <= NEAR_SILENCE_RMS_PCM16) {
             integrityCurrentNearSilentRunSamples += count
-            integrityMaxNearSilentRunSamples.accumulateAndGet(integrityCurrentNearSilentRunSamples, ::maxOf)
+            integrityMaxNearSilentRunSamples.accumulateAndGet(integrityCurrentNearSilentRunSamples) { old, current ->
+                maxOf(old, current)
+            }
         } else {
             integrityCurrentNearSilentRunSamples = 0L
         }
