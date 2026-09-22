@@ -61,7 +61,9 @@ class SharedPcmPublisher @Inject constructor(
         val converter: Pcm16Converter,
         val writtenBytes: AtomicLong = AtomicLong(),
         val droppedBytes: AtomicLong = AtomicLong(),
-        val lastWriteMs: AtomicLong = AtomicLong()
+        val lastWriteMs: AtomicLong = AtomicLong(),
+        val pendingDropBytes: AtomicLong = AtomicLong(),
+        val lastDropEventMs: AtomicLong = AtomicLong()
     )
 
     private data class AudioEffects(
@@ -75,10 +77,26 @@ class SharedPcmPublisher @Inject constructor(
         val band: BandSettings = BandSettings()
     )
 
+
+    private data class PublisherEvent(
+        val time: Long,
+        val type: String,
+        val consumerId: String? = null,
+        val packageName: String? = null,
+        val detail: String? = null,
+        val valueBytes: Long = 0L
+    )
+
     private val consumers = ConcurrentHashMap<String, Consumer>()
     private val consumerSeq = AtomicLong(0L)
     private val totalDroppedBytes = AtomicLong()
     private val writeFailures = AtomicLong()
+    private val integrityAnalyzedSamples = AtomicLong()
+    private val integrityExactZeroSamples = AtomicLong()
+    private val integrityMaxNearSilentRunSamples = AtomicLong()
+    private var integrityCurrentNearSilentRunSamples = 0L
+    private val eventLock = Any()
+    private val recentEvents = ArrayDeque<PublisherEvent>()
     @Volatile private var lastBroadcastMs = 0L
     private val mutex = Mutex()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -93,6 +111,9 @@ class SharedPcmPublisher @Inject constructor(
         const val HIGH_GAIN_MULTIPLIER = 1.8f
         const val REVERB_DELAY_SAMPLES = 2_880   // 60ms @48k 单声道
         const val WAVEFORM_POINTS_PER_FRAME = 24 // 每帧下采样出的波形振幅点数
+        const val PUBLISHER_EVENT_LIMIT = 160
+        const val DROP_EVENT_INTERVAL_MS = 500L
+        const val NEAR_SILENCE_RMS_PCM16 = 8.0
     }
 
     // 实时波形振幅点（0..1）。仅在有订阅者（波形悬浮窗打开）时计算并发送。
@@ -171,6 +192,7 @@ class SharedPcmPublisher @Inject constructor(
         if (flushQueuedAudio) flushConsumers()
         runtime.setPaused(value)
         runtime.setStreaming(if (value) false else consumers.isNotEmpty())
+        recordEvent(if (value) "playback_paused" else "playback_resumed")
         GlassLog.b("Publisher") { "paused=$value" }
     }
 
@@ -229,6 +251,12 @@ class SharedPcmPublisher @Inject constructor(
         )
         consumers[id] = consumer
         startConsumerWriter(consumer)
+        recordEvent(
+            "consumer_attached",
+            consumerId = id,
+            packageName = consumerPackage,
+            detail = "sr=$safeSampleRate ch=$safeChannels"
+        )
         GlassLog.b("Publisher") { "新 consumer: $id pkg=$consumerPackage sr=$sampleRate ch=$channels" }
         ensureWriterRunning()
     }
@@ -261,6 +289,14 @@ class SharedPcmPublisher @Inject constructor(
                 durationMs = src.durationMs()
             )
         }
+        integrityAnalyzedSamples.set(0L)
+        integrityExactZeroSamples.set(0L)
+        integrityMaxNearSilentRunSamples.set(0L)
+        integrityCurrentNearSilentRunSamples = 0L
+        recordEvent(
+            "source_changed",
+            detail = "type=${src.type} group=${groupId ?: ""} audio=${audioId ?: ""} runtime=$updateRuntime"
+        )
         GlassLog.b("Publisher") {
             "切换音源 → ${src.type}, group=$groupId audio=$audioId, updateRuntime=$updateRuntime"
         }
@@ -389,8 +425,22 @@ class SharedPcmPublisher @Inject constructor(
             var result = c.queue.trySend(payload)
             if (result.isFailure && !result.isClosed) {
                 c.queue.tryReceive().getOrNull()?.let { dropped ->
-                    c.droppedBytes.addAndGet(dropped.size.toLong())
-                    totalDroppedBytes.addAndGet(dropped.size.toLong())
+                    val droppedSize = dropped.size.toLong()
+                    c.droppedBytes.addAndGet(droppedSize)
+                    totalDroppedBytes.addAndGet(droppedSize)
+                    c.pendingDropBytes.addAndGet(droppedSize)
+                    val now = System.currentTimeMillis()
+                    val last = c.lastDropEventMs.get()
+                    if (now - last >= DROP_EVENT_INTERVAL_MS &&
+                        c.lastDropEventMs.compareAndSet(last, now)
+                    ) {
+                        recordEvent(
+                            "consumer_queue_drop",
+                            consumerId = c.id,
+                            packageName = c.pkg,
+                            valueBytes = c.pendingDropBytes.getAndSet(0L)
+                        )
+                    }
                 }
                 result = c.queue.trySend(payload)
             }
@@ -446,6 +496,7 @@ class SharedPcmPublisher @Inject constructor(
         var inputSquares = 0.0
         var outputSquares = 0.0
         var peak = 0
+        var exactZeroSamples = 0L
         var i = 0
         while (i + 1 < data.size) {
             var mixed = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)).toShort().toFloat()
@@ -463,16 +514,27 @@ class SharedPcmPublisher @Inject constructor(
             if (mixed > Short.MAX_VALUE || mixed < Short.MIN_VALUE) overRangeSamples++
             val clipped = PcmOutputLimiter.apply(mixed, fx.limiterEnabled)
             peak = maxOf(peak, kotlin.math.abs(clipped))
+            if (clipped == 0) exactZeroSamples++
             outputSquares += clipped.toDouble() * clipped
             data[i] = (clipped and 0xFF).toByte()
             data[i + 1] = ((clipped ushr 8) and 0xFF).toByte()
             i += 2
         }
         val count = data.size / 2
+        val inputRms = if (count > 0) kotlin.math.sqrt(inputSquares / count) else 0.0
+        val outputRms = if (count > 0) kotlin.math.sqrt(outputSquares / count) else 0.0
         processedSamples += count
+        integrityAnalyzedSamples.addAndGet(count.toLong())
+        integrityExactZeroSamples.addAndGet(exactZeroSamples)
+        if (count > 0 && outputRms <= NEAR_SILENCE_RMS_PCM16) {
+            integrityCurrentNearSilentRunSamples += count
+            integrityMaxNearSilentRunSamples.accumulateAndGet(integrityCurrentNearSilentRunSamples, ::maxOf)
+        } else {
+            integrityCurrentNearSilentRunSamples = 0L
+        }
         outputLevels = OutputLevels(
-            inputRms = if (count > 0) kotlin.math.sqrt(inputSquares / count) else 0.0,
-            outputRms = if (count > 0) kotlin.math.sqrt(outputSquares / count) else 0.0,
+            inputRms = inputRms,
+            outputRms = outputRms,
             peak = peak, samples = processedSamples, overRange = overRangeSamples,
             time = System.currentTimeMillis()
         )
@@ -516,6 +578,12 @@ class SharedPcmPublisher @Inject constructor(
                 }
             } catch (t: Throwable) {
                 writeFailures.incrementAndGet()
+                recordEvent(
+                    "consumer_write_failure",
+                    consumerId = consumer.id,
+                    packageName = consumer.pkg,
+                    detail = t.message
+                )
                 GlassLog.b("Publisher") { "consumer ${consumer.id} 写失败: ${t.message}" }
             } finally {
                 detach(consumer.id)
@@ -528,6 +596,12 @@ class SharedPcmPublisher @Inject constructor(
             runCatching { c.queue.close() }
             runCatching { c.out.close() }
             runCatching { c.fd.close() }
+            recordEvent(
+                "consumer_detached",
+                consumerId = c.id,
+                packageName = c.pkg,
+                detail = "written=${c.writtenBytes.get()} dropped=${c.droppedBytes.get()}"
+            )
             GlassLog.b("Publisher") { "consumer 已断开: ${c.id}" }
         }
     }
@@ -539,6 +613,30 @@ class SharedPcmPublisher @Inject constructor(
     private fun buildConsumerId(pkg: String): String =
         "$pkg-${android.os.Process.myPid()}-${consumerSeq.incrementAndGet()}"
 
+    private fun recordEvent(
+        type: String,
+        consumerId: String? = null,
+        packageName: String? = null,
+        detail: String? = null,
+        valueBytes: Long = 0L
+    ) {
+        synchronized(eventLock) {
+            while (recentEvents.size >= PUBLISHER_EVENT_LIMIT) {
+                recentEvents.removeFirst()
+            }
+            recentEvents.addLast(
+                PublisherEvent(
+                    time = System.currentTimeMillis(),
+                    type = type,
+                    consumerId = consumerId,
+                    packageName = packageName,
+                    detail = detail?.take(180),
+                    valueBytes = valueBytes
+                )
+            )
+        }
+    }
+
     /** 仅在导出时组装 JSON；保留本进程累计丢帧数，即便故障 consumer 已断开。 */
     fun diagnostics(): JSONObject = JSONObject().apply {
         put("captured_at", System.currentTimeMillis())
@@ -547,6 +645,19 @@ class SharedPcmPublisher @Inject constructor(
         put("completed", completed)
         put("total_dropped_bytes", totalDroppedBytes.get())
         put("write_failures", writeFailures.get())
+        put("active_consumer_count", consumers.size)
+        val analyzed = integrityAnalyzedSamples.get()
+        val exactZero = integrityExactZeroSamples.get()
+        put("master_integrity", JSONObject().apply {
+            put("analyzed_samples", analyzed)
+            put("exact_zero_samples", exactZero)
+            put("exact_zero_ratio", if (analyzed > 0L) exactZero.toDouble() / analyzed else 0.0)
+            put(
+                "max_near_silent_run_ms",
+                integrityMaxNearSilentRunSamples.get() * 1000L / MASTER_SAMPLE_RATE
+            )
+            put("near_silence_rms_threshold_pcm16", NEAR_SILENCE_RMS_PCM16)
+        })
         val fx = effects
         put("audio_band", JSONObject().apply {
             put("enabled", fx.band.enabled)
@@ -573,6 +684,20 @@ class SharedPcmPublisher @Inject constructor(
                     put("written_bytes", c.writtenBytes.get())
                     put("dropped_bytes", c.droppedBytes.get())
                     put("last_write_ms", c.lastWriteMs.get())
+                    put("pending_drop_bytes", c.pendingDropBytes.get())
+                })
+            }
+        })
+        put("recent_events", JSONArray().apply {
+            val snapshot = synchronized(eventLock) { recentEvents.toList() }
+            snapshot.forEach { e ->
+                put(JSONObject().apply {
+                    put("time", e.time)
+                    put("type", e.type)
+                    if (e.consumerId != null) put("consumer_id", e.consumerId)
+                    if (e.packageName != null) put("package", e.packageName)
+                    if (e.detail != null) put("detail", e.detail)
+                    if (e.valueBytes > 0L) put("value_bytes", e.valueBytes)
                 })
             }
         })

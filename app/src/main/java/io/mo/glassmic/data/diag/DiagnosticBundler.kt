@@ -71,6 +71,8 @@ class DiagnosticBundler @Inject constructor(
             writeEntry(zip, "audio_stats.json", buildAudioStats())
             writeEntry(zip, "publisher_stats.json", publisher.get().diagnostics().toString(2))
             writeEntry(zip, "playback_session.json", playbackSessionDiagnostics.diagnostics().toString(2))
+            writeEntry(zip, "audio_timeline.json", audioStatsRepo.diagnosticTimeline() ?: "[]")
+            writeEntry(zip, "audio_diagnosis.json", buildAudioDiagnosis())
             writeEntry(zip, "decisions.json", buildDecisions())
             writeEntry(zip, "memory.json", buildMemory())
         }
@@ -196,6 +198,122 @@ class DiagnosticBundler @Inject constructor(
             put("last_channels", s.lastChannels)
             audioStatsRepo.nativeDiagnostics()?.let { put("native_diagnostics", JSONObject(it)) }
             audioStatsRepo.pcmReadDiagnostics()?.let { put("pcm_read_diagnostics", JSONObject(it)) }
+        }.toString(2)
+    }
+
+    /**
+     * 把分散在各层的指标汇总成可机器/人工快速阅读的初步判断。
+     * 这里只做证据归类，不把启发式结论当成绝对事实。
+     */
+    private fun buildAudioDiagnosis(): String {
+        val publisherJson = publisher.get().diagnostics()
+        val session = playbackSessionDiagnostics.diagnostics()
+        val nativeRoot = runCatching {
+            JSONObject(audioStatsRepo.nativeDiagnostics() ?: "{}")
+        }.getOrElse { JSONObject() }
+        val pcmRoot = runCatching {
+            JSONObject(audioStatsRepo.pcmReadDiagnostics() ?: "{}")
+        }.getOrElse { JSONObject() }
+
+        val sessionStart = session.optLong("started_at", 0L)
+        val publisherDropped = session.optLong(
+            "publisher_total_dropped_bytes",
+            publisherJson.optLong("total_dropped_bytes")
+        )
+        val observedConsumers = session.optInt(
+            "observed_consumer_count",
+            publisherJson.optInt("active_consumer_count")
+        )
+
+        val nativeLatest = nativeRoot.optJSONObject("latest") ?: JSONObject()
+        val nativeLastUnderrun = nativeRoot.optJSONObject("last_underrun")
+        val nativeGapInSession = nativeLastUnderrun != null &&
+            nativeLastUnderrun.optLong("time", 0L) >= sessionStart &&
+            nativeLastUnderrun.optLong("missing_frames", 0L) > 0L
+        val skippedInLatest = nativeLatest.optLong("skipped_source_frames", 0L)
+
+        val pcmLatest = pcmRoot.optJSONObject("latest") ?: JSONObject()
+        val pcmInSession = pcmLatest.optLong("time", 0L) >= sessionStart
+        val pcmShortReads = if (pcmInSession) pcmLatest.optLong("short_reads", 0L) else 0L
+        val pcmZeroFill = if (pcmInSession) pcmLatest.optLong("zero_fill_pcm16_bytes", 0L) else 0L
+
+        val integrity = publisherJson.optJSONObject("master_integrity") ?: JSONObject()
+        val maxNearSilentMs = integrity.optLong("max_near_silent_run_ms", 0L)
+        val captureActive = nativeLatest.optLong("reads", 0L) > 0L
+        val pcmFdActive = nativeLatest.optBoolean("pcm_fd_active", false)
+
+        val stage: String
+        val summary: String
+        when {
+            publisherDropped > 0L -> {
+                stage = "PUBLISHER_QUEUE"
+                summary = "本次播放观察到 Publisher consumer 队列丢帧，优先检查慢 consumer、僵尸 consumer 或调度阻塞。"
+            }
+            nativeGapInSession || skippedInLatest > 0L -> {
+                stage = "NATIVE_BUFFER"
+                summary = "Publisher 未见会话级丢帧，但 native 层出现欠载或追帧丢弃，优先检查 pipe/ring buffer 供给。"
+            }
+            pcmShortReads > 0L || pcmZeroFill > 0L -> {
+                stage = "JAVA_PIPE"
+                summary = "Java AudioRecord pipe 出现短读或补零，优先检查 Provider consumer 写入与 XposedPcmReader。"
+            }
+            maxNearSilentMs >= 500L -> {
+                stage = "SOURCE_OR_APP_DSP"
+                summary = "Publisher 主输出自身出现较长近静音段；需结合源文件确认是源内容、GlassMic DSP，还是播放状态切换。"
+            }
+            captureActive && !publisherJson.optBoolean("paused", false) -> {
+                stage = "DOWNSTREAM_APP_DSP_OR_NETWORK"
+                summary = "当前内部链路未记录明显丢帧/欠载；若远端仍缺音，优先怀疑目标 App 后处理、VAD/降噪、编码或网络链路。"
+            }
+            else -> {
+                stage = "INSUFFICIENT_DATA"
+                summary = "当前缺少足够的活动录音或会话数据，建议在问题复现后立即导出诊断包。"
+            }
+        }
+
+        return JSONObject().apply {
+            put("generated_at", System.currentTimeMillis())
+            put("suspected_stage", stage)
+            put("summary", summary)
+            put("heuristic", true)
+            put("evidence", JSONObject().apply {
+                put("session_available", session.optBoolean("available", false))
+                put("session_started_at", sessionStart)
+                put("publisher_dropped_bytes", publisherDropped)
+                put("observed_consumer_count", observedConsumers)
+                put("multiple_consumers", observedConsumers > 1)
+                put("publisher_max_near_silent_run_ms", maxNearSilentMs)
+                put("native_capture_active", captureActive)
+                put("native_pcm_fd_active", pcmFdActive)
+                put("native_gap_in_session", nativeGapInSession)
+                put("native_latest_skipped_source_frames", skippedInLatest)
+                put("pcm_short_reads", pcmShortReads)
+                put("pcm_zero_fill_pcm16_bytes", pcmZeroFill)
+            })
+            put("next_checks", JSONArray().apply {
+                when (stage) {
+                    "PUBLISHER_QUEUE" -> {
+                        put("查看 publisher_stats.json/recent_events 中 consumer_queue_drop 的时间与对象")
+                        put("查看 playback_session.json 各 consumer 的 drop_ratio 与 dropped_duration_ms")
+                    }
+                    "NATIVE_BUFFER" -> {
+                        put("查看 audio_stats.json 的 last_underrun/last_overrun 与 path")
+                        put("对照 audio_timeline.json 中 native_gap_detected 与 pcm_fd_opened/closed")
+                    }
+                    "JAVA_PIPE" -> {
+                        put("查看 pcm_read_diagnostics.latest 的 short_reads/errors/zero_fill_pcm16_bytes")
+                    }
+                    "SOURCE_OR_APP_DSP" -> {
+                        put("确认源音频同一时间段是否本身静音")
+                        put("检查音频频段、增益、混响、变速等 DSP 设置")
+                    }
+                    "DOWNSTREAM_APP_DSP_OR_NETWORK" -> {
+                        put("对照远端录音的缺音时间，检查目标 App VAD/降噪/AGC/编码链路")
+                        put("若只在音乐/背景声发生，优先测试语音后处理假设")
+                    }
+                    else -> put("复现问题后立即导出诊断包，避免历史统计覆盖现场")
+                }
+            })
         }.toString(2)
     }
 

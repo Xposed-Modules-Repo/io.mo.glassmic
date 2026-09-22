@@ -13,6 +13,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.runtime.EffectiveSourceResolver
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -53,6 +54,50 @@ class RuntimeProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         when (method) {
+            Constants.METHOD_AUDIO_DIAG_EVENT -> {
+                if (extras == null) return null
+                val prefs = context?.getSharedPreferences(Constants.AUDIO_STATS_PREFS, Context.MODE_PRIVATE)
+                val now = extras.getLong("time").takeIf { it > 0L } ?: System.currentTimeMillis()
+                val event = extras.getString("event").orEmpty().take(64)
+                if (event.isBlank()) return null
+                val pkg = extras.getString("package") ?: callingPackage ?: arg ?: "unknown"
+
+                synchronized(statsLock) {
+                    val timeline = runCatching {
+                        JSONArray(prefs?.getString(Constants.AUDIO_STATS_TIMELINE, null) ?: "[]")
+                    }.getOrElse { JSONArray() }
+
+                    val item = JSONObject().apply {
+                        put("time", now)
+                        put("event", event)
+                        put("package", pkg)
+                        put("pid", extras.getInt("pid", -1))
+                        for (key in arrayOf(
+                            "source", "path", "reason", "detail"
+                        )) {
+                            extras.getString(key)?.takeIf { it.isNotBlank() }?.let { put(key, it.take(160)) }
+                        }
+                        for (key in arrayOf(
+                            "reads", "missing_frames", "requested_frames", "skipped_source_frames",
+                            "capture_age_ms", "value_bytes", "sample_rate", "channels"
+                        )) {
+                            if (extras.containsKey(key)) put(key, extras.getLong(key))
+                        }
+                        if (extras.containsKey("pcm_fd_active")) {
+                            put("pcm_fd_active", extras.getBoolean("pcm_fd_active"))
+                        }
+                    }
+
+                    val trimmed = JSONArray()
+                    val start = (timeline.length() - DIAG_TIMELINE_LIMIT + 1).coerceAtLeast(0)
+                    for (i in start until timeline.length()) {
+                        trimmed.put(timeline.opt(i))
+                    }
+                    trimmed.put(item)
+                    prefs?.edit()?.putString(Constants.AUDIO_STATS_TIMELINE, trimmed.toString())?.apply()
+                }
+                return Bundle().apply { putBoolean("ok", true) }
+            }
             Constants.METHOD_PCM_READ_STATS -> {
                 if (extras == null) return null
                 val pkg = callingPackage ?: arg ?: "unknown"
@@ -186,5 +231,6 @@ class RuntimeProvider : ContentProvider() {
         private val statsLock = Any()
         @Volatile private var lastPingWrite = 0L
         private const val PING_WRITE_THROTTLE_MS = 3000L
+        private const val DIAG_TIMELINE_LIMIT = 160
     }
 }

@@ -79,6 +79,12 @@ object NativeAAudioHook {
             return false
         }
         android.util.Log.i(TAG, "AAudio native hook installed in $callerPackage")
+        XBridge.reportDiagnosticEvent(
+            ctx,
+            callerPackage,
+            "native_hooks_installed",
+            Bundle().apply { putString("detail", "AAudio/OpenSL/AudioRecord hook install completed") }
+        )
 
         // 4. 启动轮询线程
         startPoller(ctx, callerPackage)
@@ -90,6 +96,9 @@ object NativeAAudioHook {
         pollerStarted = true
         thread(name = "GlassMic-AAudioPoller", isDaemon = true, priority = Thread.MIN_PRIORITY) {
             var lastNativeCaptureAtMs = 0L
+            var lastSource: SourceType? = null
+            var lastPath = 0
+            var lastGapEventAtMs = 0L
 
             while (true) {
                 try {
@@ -102,11 +111,25 @@ object NativeAAudioHook {
                         SourceType.SILENCE -> 2
                     }
                     nativeSetDecision(decisionCode)
+                    if (lastSource != src) {
+                        XBridge.reportDiagnosticEvent(
+                            ctx,
+                            callerPackage,
+                            "source_decision_changed",
+                            Bundle().apply {
+                                putString("source", src.name)
+                                putString("detail", "previous=${lastSource?.name ?: "none"}")
+                            }
+                        )
+                        lastSource = src
+                    }
 
                     // 4.2 拉取统计，同时把 reads 当作录音活动心跳。
                     val stats = nativeDrainStats()
                     val now = SystemClock.uptimeMillis()
                     val reads = stats?.getOrNull(0)?.toInt() ?: 0
+                    val inactiveBeforeRead = lastNativeCaptureAtMs == 0L ||
+                        now - lastNativeCaptureAtMs > PCM_OPEN_ACTIVITY_WINDOW_MS
                     if (reads > 0) {
                         lastNativeCaptureAtMs = now
                     }
@@ -115,15 +138,68 @@ object NativeAAudioHook {
                     } else {
                         Long.MAX_VALUE
                     }
+                    val pathCode = stats?.getOrNull(7)?.toInt() ?: 0
+                    val pathName = pathName(pathCode)
+
+                    if (reads > 0 && inactiveBeforeRead) {
+                        XBridge.reportDiagnosticEvent(
+                            ctx,
+                            callerPackage,
+                            "native_capture_active",
+                            Bundle().apply {
+                                putLong("reads", reads.toLong())
+                                putLong("capture_age_ms", 0L)
+                                putString("path", pathName)
+                                putLong("sample_rate", stats?.getOrNull(2) ?: 0L)
+                                putLong("channels", stats?.getOrNull(3) ?: 0L)
+                            }
+                        )
+                    }
+                    if (pathCode != 0 && pathCode != lastPath) {
+                        XBridge.reportDiagnosticEvent(
+                            ctx,
+                            callerPackage,
+                            "native_path_changed",
+                            Bundle().apply {
+                                putString("path", pathName)
+                                putString("detail", "previous=${pathName(lastPath)}")
+                            }
+                        )
+                        lastPath = pathCode
+                    }
+                    if (stats != null && stats.size >= 9) {
+                        val underruns = stats[4]
+                        val missing = stats[5]
+                        val skipped = stats[8]
+                        if ((underruns > 0L || skipped > 0L) && now - lastGapEventAtMs >= 500L) {
+                            lastGapEventAtMs = now
+                            XBridge.reportDiagnosticEvent(
+                                ctx,
+                                callerPackage,
+                                "native_gap_detected",
+                                Bundle().apply {
+                                    putString("path", pathName)
+                                    putLong("reads", reads.toLong())
+                                    putLong("missing_frames", missing)
+                                    putLong("requested_frames", stats[6])
+                                    putLong("skipped_source_frames", skipped)
+                                    putLong("capture_age_ms", captureAgeMs)
+                                    putBoolean("pcm_fd_active", hasPushedFd)
+                                }
+                            )
+                        }
+                    }
 
                     // 4.3 只有目标进程最近确实发生过 native 录音回调，才创建 PCM Provider consumer。
                     // 旧逻辑仅凭 FILE 决策就打开 fd，会让王者等多进程应用产生长期空闲 consumer，
                     // Publisher 持续向没人读取的 pipe 写入并大量丢弃队列数据。
                     val needsPcm = src == SourceType.FILE || src == SourceType.TTS
                     when {
-                        needsPcm && captureAgeMs <= PCM_OPEN_ACTIVITY_WINDOW_MS -> ensurePcmFd(ctx)
+                        needsPcm && captureAgeMs <= PCM_OPEN_ACTIVITY_WINDOW_MS -> ensurePcmFd(ctx, callerPackage)
                         hasPushedFd && (!needsPcm || captureAgeMs > PCM_CLOSE_IDLE_MS) -> {
                             closePcmFd(
+                                ctx,
+                                callerPackage,
                                 if (!needsPcm) "source=$src" else "capture idle ${captureAgeMs}ms"
                             )
                         }
@@ -141,13 +217,7 @@ object NativeAAudioHook {
                             putLong("skipped_source_frames", stats.getOrElse(8) { 0L })
                             putLong("native_capture_age_ms", captureAgeMs)
                             putBoolean("pcm_fd_active", hasPushedFd)
-                            putString("path", when (stats[7].toInt()) {
-                                1 -> "AAudio.read"
-                                2 -> "AAudio.callback"
-                                3 -> "AudioRecord.native"
-                                4 -> "OpenSL.callback"
-                                else -> "unknown"
-                            })
+                            putString("path", pathName(stats[7].toInt()))
                         } else null
                         XBridge.reportInterceptBatch(
                             ctx,
@@ -166,14 +236,14 @@ object NativeAAudioHook {
                 try {
                     Thread.sleep(POLL_INTERVAL_MS)
                 } catch (_: InterruptedException) {
-                    closePcmFd("poller interrupted")
+                    closePcmFd(ctx, callerPackage, "poller interrupted")
                     return@thread
                 }
             }
         }
     }
 
-    private fun ensurePcmFd(ctx: Context) {
+    private fun ensurePcmFd(ctx: Context, callerPackage: String) {
         // native 广播缓冲统一使用 48kHz mono；各录音 stream 再在 native 侧按目标格式转换。
         val wantSr = 48_000
         val wantCh = 1
@@ -185,7 +255,13 @@ object NativeAAudioHook {
         }.onFailure {
             android.util.Log.w(TAG, "open pcm pipe failed: ${it.message}")
         }.getOrNull() ?: run {
-            closePcmFd("open provider failed")
+            XBridge.reportDiagnosticEvent(
+                ctx,
+                callerPackage,
+                "pcm_fd_open_failed",
+                Bundle().apply { putString("reason", "open provider failed") }
+            )
+            closePcmFd(ctx, callerPackage, "open provider failed")
             return
         }
 
@@ -197,7 +273,13 @@ object NativeAAudioHook {
         }
         runCatching { pfd.close() }
         if (fd < 0) {
-            closePcmFd("detach/dup failed")
+            XBridge.reportDiagnosticEvent(
+                ctx,
+                callerPackage,
+                "pcm_fd_open_failed",
+                Bundle().apply { putString("reason", "detach/dup failed") }
+            )
+            closePcmFd(ctx, callerPackage, "detach/dup failed")
             return
         }
 
@@ -206,9 +288,19 @@ object NativeAAudioHook {
         pushedFdSr = wantSr
         pushedFdCh = wantCh
         android.util.Log.i(TAG, "pcm fd opened on active capture: fd=$fd sr=$wantSr ch=$wantCh")
+        XBridge.reportDiagnosticEvent(
+            ctx,
+            callerPackage,
+            "pcm_fd_opened",
+            Bundle().apply {
+                putBoolean("pcm_fd_active", true)
+                putLong("sample_rate", wantSr.toLong())
+                putLong("channels", wantCh.toLong())
+            }
+        )
     }
 
-    private fun closePcmFd(reason: String) {
+    private fun closePcmFd(ctx: Context, callerPackage: String, reason: String) {
         if (!hasPushedFd) {
             pushedFdSr = 0
             pushedFdCh = 0
@@ -219,6 +311,23 @@ object NativeAAudioHook {
         pushedFdSr = 0
         pushedFdCh = 0
         android.util.Log.i(TAG, "pcm fd closed: $reason")
+        XBridge.reportDiagnosticEvent(
+            ctx,
+            callerPackage,
+            "pcm_fd_closed",
+            Bundle().apply {
+                putBoolean("pcm_fd_active", false)
+                putString("reason", reason)
+            }
+        )
+    }
+
+    private fun pathName(code: Int): String = when (code) {
+        1 -> "AAudio.read"
+        2 -> "AAudio.callback"
+        3 -> "AudioRecord.native"
+        4 -> "OpenSL.callback"
+        else -> "unknown"
     }
 
     // =================== JNI ===================
