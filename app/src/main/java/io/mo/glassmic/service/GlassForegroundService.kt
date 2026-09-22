@@ -11,8 +11,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
@@ -20,6 +20,7 @@ import io.mo.glassmic.MainActivity
 import io.mo.glassmic.R
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.audio.PlaybackController
+import io.mo.glassmic.data.diag.PlaybackSessionDiagnostics
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.memory.FairMemoryController
@@ -43,6 +44,7 @@ class GlassForegroundService : LifecycleService() {
     @Inject lateinit var runtime: RuntimeStateHolder
     @Inject lateinit var playback: PlaybackController
     @Inject lateinit var fairMemory: FairMemoryController
+    @Inject lateinit var playbackSessionDiagnostics: PlaybackSessionDiagnostics
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
@@ -66,6 +68,8 @@ class GlassForegroundService : LifecycleService() {
         runtime.setEnabled(true)
         // 常驻期间才低频采样内存——服务不跑时本进程没有音频缓冲，也就没什么可看的
         fairMemory.startSampling()
+        // 会话诊断仅在服务运行时观察播放状态，避免 App 空闲时常驻协程。
+        playbackSessionDiagnostics.start()
         lifecycleScope.launch {
             if (playback.restorePersistedClip()) {
                 GlassLog.b("FgService") { "restored persisted audio source" }
@@ -87,6 +91,7 @@ class GlassForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        playbackSessionDiagnostics.stop()
         runtime.setEnabled(false)
         fairMemory.stopSampling()
         runCatching {
@@ -164,7 +169,8 @@ class GlassForegroundService : LifecycleService() {
 
     private fun buildNotification(): Notification {
         val pi = PendingIntent.getActivity(
-            this, 0,
+            this,
+            0,
             Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
@@ -187,6 +193,7 @@ class GlassForegroundService : LifecycleService() {
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, GlassForegroundService::class.java))
         }
+
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, GlassForegroundService::class.java))
         }
