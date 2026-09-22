@@ -43,12 +43,14 @@ class GlassMicXposedModule : XposedModule() {
 
     override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
         log(Log.INFO, TAG, "loaded in system_server")
-        // 跨进程包可见性放行：Android 11+（尤其是 targetSdk >= 30 的应用如 Telegram）严格执行包可见性过滤。
-        // 若不放行，被注入的第三方 App 无法通过 ContentResolver 访问 RuntimeProvider / PcmStreamProvider，
-        // 导致决策永远 fallback 到 REAL_MIC。放行仅针对本包 (io.mo.glassmic)，不影响任何其他包。
+        // 跨进程包可见性兼容：只对 GlassMic 当前目标白名单里的调用方解除本包可见性过滤。
+        // 这样 Telegram/微信等严格执行 Android 11+ 包可见性的应用仍能访问 Provider；
+        // 未授权应用则完全保留系统/HMA 的原始过滤结果，不再把 GlassMic 全局暴露出去。
         runCatching {
-            val ok = SystemVisibilityHook.install(this, param.classLoader)
-            log(Log.INFO, TAG, "visibility compat allowlist hook installed=$ok")
+            val ok = SystemVisibilityHook.install(this, param.classLoader) {
+                runCatching { getRemotePreferences(Constants.REMOTE_PREFS) }.getOrNull()
+            }
+            log(Log.INFO, TAG, "scoped visibility allowlist hook installed=$ok")
         }.onFailure {
             log(Log.WARN, TAG, "visibility compat init error: ${it.message}", it)
         }
