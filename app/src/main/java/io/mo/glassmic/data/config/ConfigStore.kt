@@ -36,6 +36,7 @@ class ConfigStore @Inject constructor(
     val flow: Flow<AppConfig> = dataStore.data.onEach { cfg ->
         // 每次配置变更同步给 Xposed 进程
         syncToXShared(cfg)
+        syncVisibilityAllowlist(cfg)
     }
 
     val snapshotFlow: Flow<ConfigSnapshot> = flow.map { it.toSnapshot() }
@@ -48,9 +49,12 @@ class ConfigStore @Inject constructor(
     suspend fun current(): AppConfig = dataStore.data.first()
 
     suspend fun update(transform: (AppConfig.Builder) -> Unit) {
-        dataStore.updateData { current ->
+        val updated = dataStore.updateData { current ->
             current.toBuilder().also(transform).build()
         }
+        // DataStore 的 flow 不一定此刻正被收集；作用域变化后主动同步一次，
+        // 避免 system_server 在下一次 UI 订阅前仍拿到旧白名单。
+        syncVisibilityAllowlist(updated)
     }
 
     private fun syncToXShared(cfg: AppConfig) {
@@ -73,6 +77,33 @@ class ConfigStore @Inject constructor(
             putString("current_audio_id", cfg.currentAudioId)
             putString("playback_policy", cfg.playbackPolicy.name)
         }.apply()
+    }
+    /**
+     * 把 App 内目标白名单同步给 system_server 的包可见性 Hook。
+     *
+     * 这份数据只决定“哪些调用方可以强制看到 GlassMic 本包”，不改变实际音频生效范围；
+     * 真正是否替换麦克风仍由 RuntimeProvider / ScopeMatcher 再校验一次。
+     */
+    private fun syncVisibilityAllowlist(cfg: AppConfig) {
+        val allowed = cfg.whitelistList
+            .asSequence()
+            .filter { it.isNotBlank() && it != Constants.APP_PACKAGE }
+            .toSet()
+
+        @Suppress("DEPRECATION", "WorldReadableFiles")
+        val prefs = runCatching {
+            context.getSharedPreferences(Constants.REMOTE_PREFS, Context.MODE_WORLD_READABLE)
+        }.getOrElse {
+            // 与现有 remote preferences 路径保持一致。若当前框架无法暴露该文件，
+            // system_server 将读不到白名单并按“拒绝额外放行”处理，不会扩大可见性。
+            context.getSharedPreferences(Constants.REMOTE_PREFS, Context.MODE_PRIVATE)
+        }
+
+        runCatching {
+            prefs.edit()
+                .putStringSet(Constants.KEY_VISIBILITY_ALLOWLIST, allowed)
+                .apply()
+        }
     }
 }
 
