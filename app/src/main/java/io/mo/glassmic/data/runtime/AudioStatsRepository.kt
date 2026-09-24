@@ -55,6 +55,7 @@ class AudioStatsRepository @Inject constructor(
 
     fun nativeDiagnostics(): String? = prefs.getString(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS, null)
     fun pcmReadDiagnostics(): String? = prefs.getString(Constants.AUDIO_STATS_PCM_DIAGNOSTICS, null)
+    fun diagnosticTimeline(): String? = prefs.getString(Constants.AUDIO_STATS_TIMELINE, null)
 
     fun reset() {
         prefs.edit()
@@ -66,6 +67,7 @@ class AudioStatsRepository @Inject constructor(
             .remove(Constants.AUDIO_STATS_LAST_CHANNELS)
             .remove(Constants.AUDIO_STATS_NATIVE_DIAGNOSTICS)
             .remove(Constants.AUDIO_STATS_PCM_DIAGNOSTICS)
+            .remove(Constants.AUDIO_STATS_TIMELINE)
             .apply()
     }
 }

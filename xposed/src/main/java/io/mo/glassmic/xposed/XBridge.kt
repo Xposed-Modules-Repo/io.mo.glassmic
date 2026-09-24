@@ -131,6 +131,35 @@ object XBridge {
         }
     }
 
+    /**
+     * 上报低频诊断事件。只用于状态切换/异常，不在实时音频线程直接做 Binder 调用。
+     * fields 只接受基础类型；RuntimeProvider 会再次挑选允许写入诊断包的字段。
+     */
+    fun reportDiagnosticEvent(
+        ctx: Context,
+        callerPackage: String,
+        event: String,
+        fields: Bundle = Bundle()
+    ) {
+        if (event.isBlank()) return
+        runCatching {
+            pcmReportExecutor.execute {
+                runCatching {
+                    fields.putString("event", event)
+                    fields.putString("package", callerPackage)
+                    fields.putLong("time", System.currentTimeMillis())
+                    fields.putInt("pid", android.os.Process.myPid())
+                    ctx.contentResolver.call(
+                        Uri.parse("content://${Constants.PROVIDER_RUNTIME}"),
+                        Constants.METHOD_AUDIO_DIAG_EVENT,
+                        callerPackage,
+                        fields
+                    )
+                }
+            }
+        }
+    }
+
     fun resolveSource(ctx: Context, callerPackage: String): SourceType {
         val now = System.currentTimeMillis()
         val ttl = if (lastReachable) CACHE_TTL_MS else UNREACHABLE_TTL_MS

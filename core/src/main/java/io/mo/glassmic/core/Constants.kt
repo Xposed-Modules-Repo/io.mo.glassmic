@@ -25,8 +25,10 @@ object Constants {
     const val AUDIO_STATS_LAST_CHANNELS = "last_channels"
     const val AUDIO_STATS_NATIVE_DIAGNOSTICS = "native_diagnostics"
     const val AUDIO_STATS_PCM_DIAGNOSTICS = "pcm_read_diagnostics"
+    const val AUDIO_STATS_TIMELINE = "audio_diagnostic_timeline"
     const val METHOD_PCM_READ_STATS = "pcm_read_stats"
     const val METHOD_AUDIO_INTERCEPT = "audio_intercept"
+    const val METHOD_AUDIO_DIAG_EVENT = "audio_diag_event"
 
     // ContentProvider authorities
     const val PROVIDER_RUNTIME = "io.mo.glassmic.provider.runtime"
