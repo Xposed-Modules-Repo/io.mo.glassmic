@@ -6,9 +6,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import io.github.libxposed.service.XposedServiceHelper.OnServiceListener
+import io.mo.glassmic.core.Constants
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.Executors
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,6 +38,10 @@ class LsposedServiceManager @Inject constructor(
     @Volatile
     private var xposedService: XposedService? = null
 
+    private val remotePrefsExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "GlassMic-RemotePrefs").apply { isDaemon = true }
+    }
+
     init {
         runCatching {
             XposedServiceHelper.registerListener(this)
@@ -50,6 +56,8 @@ class LsposedServiceManager @Inject constructor(
         val scopeList = runCatching { service.scope }.getOrNull()
         _frameworkScope.value = scopeList
         Log.i(tag, "XposedService bound successfully, framework API: ${service.apiVersion}, scope: $scopeList")
+        // 绑定前 App 侧可能已经写过本地 prefs（进程启动时 ConfigStore 先同步），这里补一次全量镜像。
+        syncRemotePrefs()
     }
 
     override fun onServiceDied(service: XposedService) {
@@ -58,6 +66,43 @@ class LsposedServiceManager @Inject constructor(
             _isBound.value = false
             _frameworkScope.value = null
             Log.i(tag, "XposedService died")
+        }
+    }
+
+    /**
+     * 把本地 [Constants.REMOTE_PREFS] 整份镜像到 LSPosed remote preferences。
+     *
+     * Xposed 侧（system_server 里的 SystemVisibilityHook / VolumeKeyHook）通过 libxposed 的
+     * `getRemotePreferences()` 读取，数据存在 LSPosed 框架里，**只能**经由 [XposedService] 写入；
+     * App 自己 `getSharedPreferences(MODE_WORLD_READABLE)` 写的本地文件对它不可见。
+     * 此前只写本地文件，导致 system_server 读到的可见性白名单恒为空，HMA 隐藏 GlassMic 的
+     * App（微信、Telegram 等）拿不到 Provider。
+     *
+     * 本地文件仍是 App 侧的唯一数据源（UI 回显、token 校验都读它），这里只做单向镜像。
+     * 涉及 binder IPC，统一丢到单线程执行，调用方可在任意线程调用。未绑定时直接跳过，
+     * 等 [onServiceBind] 再补。
+     */
+    fun syncRemotePrefs() {
+        if (xposedService == null) return
+        remotePrefsExecutor.execute {
+            val service = xposedService ?: return@execute
+            runCatching {
+                val local = context.getSharedPreferences(Constants.REMOTE_PREFS, Context.MODE_PRIVATE)
+                val editor = service.getRemotePreferences(Constants.REMOTE_PREFS).edit()
+                for ((key, value) in local.all) {
+                    when (value) {
+                        is Boolean -> editor.putBoolean(key, value)
+                        is String -> editor.putString(key, value)
+                        is Int -> editor.putInt(key, value)
+                        is Long -> editor.putLong(key, value)
+                        is Float -> editor.putFloat(key, value)
+                        is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                    }
+                }
+                editor.commit()
+            }.onFailure {
+                Log.w(tag, "sync remote prefs failed: ${it.message}")
+            }
         }
     }
 

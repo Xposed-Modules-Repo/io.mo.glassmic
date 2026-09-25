@@ -7,6 +7,7 @@ import androidx.datastore.dataStoreFile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.ConfigSnapshot
+import io.mo.glassmic.data.runtime.LsposedServiceManager
 import io.mo.glassmic.core.model.ScopeMode as ScopeModeCore
 import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.ScopeMode
@@ -24,7 +25,8 @@ import javax.inject.Singleton
 
 @Singleton
 class ConfigStore @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val lsposedServiceManager: LsposedServiceManager
 ) {
 
     private val dataStore: DataStore<AppConfig> = DataStoreFactory.create(
@@ -104,6 +106,8 @@ class ConfigStore @Inject constructor(
                 .putStringSet(Constants.KEY_VISIBILITY_ALLOWLIST, allowed)
                 .apply()
         }
+        // 本地文件对 system_server 不可见，必须再经 XposedService 写进 LSPosed remote preferences。
+        lsposedServiceManager.syncRemotePrefs()
     }
 }
 

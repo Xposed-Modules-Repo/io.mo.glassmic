@@ -14,7 +14,7 @@ import javax.inject.Singleton
  *
  * 键事件只有 system_server 里的 PhoneWindowManager 拿得到，所以拦截逻辑住在 Xposed 侧
  * （VolumeKeyHook）。这个类负责把 App 侧的两条信息递过去，走 LSPosed remote preferences
- * （App 用 MODE_WORLD_READABLE 写、system_server 只读）：
+ * （App 先写本地文件，再由 [LsposedServiceManager.syncRemotePrefs] 镜像过去；system_server 只读）：
  *
  *  1. **armed** —— 设置开关打开 **且** 悬浮窗正在运行。为 false 时模块侧一律直接放行，
  *     音量键行为和没装模块完全一样。悬浮窗一关就撤防，把误伤面压到最小。
@@ -27,7 +27,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class VolumeShortcutRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val lsposedServiceManager: LsposedServiceManager
 ) {
     private val prefs: SharedPreferences by lazy {
         @Suppress("DEPRECATION", "WorldReadableFiles")
@@ -53,6 +54,7 @@ class VolumeShortcutRepository @Inject constructor(
             val editor = prefs.edit().putBoolean(Constants.KEY_VOLUME_SHORTCUT_ARMED, armed)
             if (armed) editor.putString(Constants.KEY_VOLUME_SHORTCUT_TOKEN, newToken())
             editor.commit()
+            lsposedServiceManager.syncRemotePrefs()
         }.onFailure {
             GlassLog.b("VolKey") { "写布防状态失败: ${it.message}" }
         }
