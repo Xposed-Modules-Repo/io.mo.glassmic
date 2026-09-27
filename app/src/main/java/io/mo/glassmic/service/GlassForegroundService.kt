@@ -45,6 +45,7 @@ class GlassForegroundService : LifecycleService() {
     @Inject lateinit var playback: PlaybackController
     @Inject lateinit var fairMemory: FairMemoryController
     @Inject lateinit var playbackSessionDiagnostics: PlaybackSessionDiagnostics
+    @Inject lateinit var audioPolicy: io.mo.glassmic.root.AudioPolicyController
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
@@ -66,6 +67,7 @@ class GlassForegroundService : LifecycleService() {
         }
         startForegroundCompat()
         runtime.setEnabled(true)
+        audioPolicy.start()
         // 常驻期间才低频采样内存——服务不跑时本进程没有音频缓冲，也就没什么可看的
         fairMemory.startSampling()
         // 会话诊断仅在服务运行时观察播放状态，避免 App 空闲时常驻协程。
@@ -91,6 +93,7 @@ class GlassForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        audioPolicy.stop()
         playbackSessionDiagnostics.stop()
         runtime.setEnabled(false)
         fairMemory.stopSampling()

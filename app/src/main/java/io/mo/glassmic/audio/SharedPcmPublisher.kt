@@ -60,6 +60,7 @@ class SharedPcmPublisher @Inject constructor(
         val out: FileOutputStream,
         val queue: Channel<ByteArray>,
         val converter: Pcm16Converter,
+        val framed: Boolean = false,
         val writtenBytes: AtomicLong = AtomicLong(),
         val droppedBytes: AtomicLong = AtomicLong(),
         val lastWriteMs: AtomicLong = AtomicLong(),
@@ -134,6 +135,7 @@ class SharedPcmPublisher @Inject constructor(
     private val reverbLine = ReverbLine(REVERB_DELAY_SAMPLES)
     private val bandFilter = StreamingBandFilter()
     private val effectsEpoch = AtomicLong()
+    private val streamEpoch = AtomicLong()
     private var appliedEffectsEpoch = -1L
     private var processedSamples = 0L
     private var overRangeSamples = 0L
@@ -212,6 +214,7 @@ class SharedPcmPublisher @Inject constructor(
 
     /** 清空所有 Consumer 队列中的残留数据并重置重采样状态，实现即时切换/暂停/Seek */
     private fun flushConsumers() {
+        streamEpoch.incrementAndGet()
         consumers.values.forEach { c ->
             while (c.queue.tryReceive().isSuccess) {}
             c.converter.reset()
@@ -223,16 +226,19 @@ class SharedPcmPublisher @Inject constructor(
         consumerPackage: String,
         sampleRate: Int,
         channels: Int,
-        writeFd: ParcelFileDescriptor
-    ) {
+        writeFd: ParcelFileDescriptor,
+        bufferBytes: Int = 32768,
+        queueCapacity: Int = 16,
+        framed: Boolean = false
+    ): String {
         // 设置 Linux 内核 pipe buffer 至 32KB，兼顾低延迟与抗调度抖动
         runCatching {
-            android.system.Os.fcntlInt(writeFd.fileDescriptor, 1031 /* F_SETPIPE_SZ */, 32768)
+            android.system.Os.fcntlInt(writeFd.fileDescriptor, 1031 /* F_SETPIPE_SZ */, bufferBytes)
         }
         val id = buildConsumerId(consumerPackage)
         val fos = FileOutputStream(writeFd.fileDescriptor)
         // ~320ms 抗调度抖动；溢出由 broadcast 显式处理并计数，不能静默丢片段。
-        val queue = Channel<ByteArray>(capacity = 16)
+        val queue = Channel<ByteArray>(capacity = queueCapacity)
         val safeSampleRate = sampleRate.coerceAtLeast(8_000)
         val safeChannels = channels.coerceAtLeast(1)
         val consumer = Consumer(
@@ -243,6 +249,7 @@ class SharedPcmPublisher @Inject constructor(
             fd = writeFd,
             out = fos,
             queue = queue,
+            framed = framed,
             converter = Pcm16Converter(
                 sourceSampleRate = MASTER_SAMPLE_RATE,
                 sourceChannels = MASTER_CHANNELS,
@@ -260,6 +267,7 @@ class SharedPcmPublisher @Inject constructor(
         )
         GlassLog.b("Publisher") { "新 consumer: $id pkg=$consumerPackage sr=$sampleRate ch=$channels" }
         ensureWriterRunning()
+        return id
     }
 
     fun setSource(
@@ -333,6 +341,7 @@ class SharedPcmPublisher @Inject constructor(
                 // 暂停 → 读舒适噪声源（不动真实源的位置，但保持下游有本底信号，避免录音中断）；
                 // 其它情况读当前源
                 val readEffectsEpoch = effectsEpoch.get()
+                val readStreamEpoch = streamEpoch.get()
                 val readSource = when {
                     paused && completed -> SilenceSource
                     paused -> ComfortNoiseSource
@@ -351,7 +360,7 @@ class SharedPcmPublisher @Inject constructor(
                         if (!paused) runtime.setPosition(readSource.positionMs())
                         // 变速会改变实际广播的字节数——按广播出去的量节流，
                         // 才能让消费端以正常采样率播放时得到正确的变速节奏
-                        val outBytes = broadcast(frame, readEffectsEpoch)
+                        val outBytes = broadcast(frame, readEffectsEpoch, readStreamEpoch)
 
                         val frameNanos = (outBytes.toLong() * 1_000_000_000L + bytesPerSec - 1) / bytesPerSec
                         nextSendAtNanos += frameNanos
@@ -407,7 +416,7 @@ class SharedPcmPublisher @Inject constructor(
     }
 
     /** 返回实际广播出去的 master 字节数（变速后可能与输入不同）。 */
-    private fun broadcast(buf: ByteBuffer, readEffectsEpoch: Long): Int {
+    private fun broadcast(buf: ByteBuffer, readEffectsEpoch: Long, readStreamEpoch: Long): Int {
         val data = ByteArray(buf.remaining())
         buf.get(data)
         val sourceData = if (!paused && (currentSource.type == SourceType.FILE || currentSource.type == SourceType.TTS)) {
@@ -421,8 +430,15 @@ class SharedPcmPublisher @Inject constructor(
             monitorPlayer.pauseAndFlush()
         }
         consumers.values.forEach { c ->
-            val payload = c.converter.convert(sourceData)
-            if (payload.isEmpty()) return@forEach
+            // A seek/source change while decoding must not tag old samples as a new generation.
+            if (c.framed && readStreamEpoch != streamEpoch.get()) return@forEach
+            val converted = c.converter.convert(sourceData)
+            if (converted.isEmpty()) return@forEach
+            // AudioPolicy helper needs explicit boundaries to flush on pause/seek/source changes.
+            // The epoch travels WITH the frame, so a control message cannot race new PCM.
+            val payload = if (c.framed) ByteBuffer.allocate(12 + converted.size)
+                .putLong(readStreamEpoch).putInt(converted.size).put(converted).array()
+                else converted
             var result = c.queue.trySend(payload)
             if (result.isFailure && !result.isClosed) {
                 c.queue.tryReceive().getOrNull()?.let { dropped ->

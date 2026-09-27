@@ -66,6 +66,8 @@ import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.R
 import io.mo.glassmic.data.diag.AudioPipelineProbe
 import io.mo.glassmic.proto.AppLanguage
+import io.mo.glassmic.proto.InjectionBackend
+import io.mo.glassmic.root.PolicyPhase
 import io.mo.glassmic.proto.FloatingSize
 import io.mo.glassmic.proto.LogLevel
 import io.mo.glassmic.proto.PlaybackPolicy
@@ -85,6 +87,8 @@ fun SettingsScreen(
     vm: SettingsViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsState()
+    val policyStatus by vm.policyStatus.collectAsState()
+    val runtimeState by vm.runtimeState.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -168,6 +172,32 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item { Section(stringResource(R.string.backend_title)) {
+                val canChange = !runtimeState.enabled &&
+                    policyStatus.phase !in listOf(PolicyPhase.STARTING, PolicyPhase.ACTIVE, PolicyPhase.STOPPING)
+                listOf(
+                    InjectionBackend.LSPOSED to stringResource(R.string.backend_lsposed),
+                    InjectionBackend.AUDIO_POLICY to stringResource(R.string.backend_audio_policy)
+                ).forEach { (backend, label) ->
+                    Row(Modifier.fillMaxWidth().clickable(enabled = canChange) { vm.setBackend(backend) },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = cfg.injectionBackend == backend,
+                            onClick = { vm.setBackend(backend) }, enabled = canChange)
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(stringResource(R.string.backend_switch_hint), style = MaterialTheme.typography.bodySmall)
+                if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
+                    Text(stringResource(R.string.backend_policy_hint), style = MaterialTheme.typography.bodySmall)
+                    Text(policyStatus.label(context), style = MaterialTheme.typography.bodySmall,
+                        color = if (policyStatus.phase == PolicyPhase.ERROR) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = onOpenScope) { Text(stringResource(R.string.scope_title)) }
+                    if (runtimeState.enabled && policyStatus.phase == PolicyPhase.ERROR) {
+                        TextButton(onClick = vm::retryAudioPolicy) { Text(stringResource(R.string.backend_retry)) }
+                    }
+                }
+            } }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 item { Section(stringResource(R.string.settings_section_tile)) {
                     ActionRow(stringResource(R.string.settings_tile_add), onClick = onAddTile)
@@ -226,7 +256,9 @@ fun SettingsScreen(
             } }
 
             item { Section(stringResource(R.string.scope_title)) {
-                val scopeSubtitle = if (cfg.whitelistCount > 0) {
+                val scopeSubtitle = if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
+                    cfg.audioPolicyPackage.ifBlank { stringResource(R.string.scope_none_selected) }
+                } else if (cfg.whitelistCount > 0) {
                     stringResource(R.string.home_scope_whitelist_count, cfg.whitelistCount)
                 } else {
                     stringResource(R.string.scope_none_selected)

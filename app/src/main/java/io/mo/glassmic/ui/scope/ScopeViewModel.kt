@@ -12,6 +12,7 @@ import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.runtime.LsposedServiceManager
 import io.mo.glassmic.data.runtime.ScopeRequestResult
 import io.mo.glassmic.proto.ScopeMode
+import io.mo.glassmic.proto.InjectionBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,7 @@ sealed interface ScopeEvent {
 }
 
 data class ScopeUiState(
+    val audioPolicyBackend: Boolean = false,
     val whitelist: Set<String> = emptySet(),
     val isLsposedServiceBound: Boolean = false,
     val showSystemApps: Boolean = false,
@@ -88,7 +90,9 @@ class ScopeViewModel @Inject constructor(
         _apps
     ) { cfg, isBound, query, loading, apps ->
         ScopeUiState(
-            whitelist = cfg.whitelistList.toSet(),
+            audioPolicyBackend = cfg.injectionBackend == InjectionBackend.AUDIO_POLICY,
+            whitelist = if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY)
+                setOf(cfg.audioPolicyPackage).filter { it.isNotBlank() }.toSet() else cfg.whitelistList.toSet(),
             isLsposedServiceBound = isBound,
             showSystemApps = cfg.showSystemApps,
             query = query,
@@ -133,6 +137,7 @@ class ScopeViewModel @Inject constructor(
     /** 从 LSPosed 管理器拉取并精准同步最新作用域 */
     fun syncFromManager(silent: Boolean = false) {
         viewModelScope.launch {
+            if (configStore.current().injectionBackend == InjectionBackend.AUDIO_POLICY) return@launch
             val list = lsposedServiceManager.syncScope()
             if (list != null) {
                 val valid = list.filter { pkg -> pkg != Constants.APP_PACKAGE && pkg.isNotBlank() }
@@ -151,6 +156,12 @@ class ScopeViewModel @Inject constructor(
 
     fun toggleApp(pkg: String) {
         viewModelScope.launch {
+            if (configStore.current().injectionBackend == InjectionBackend.AUDIO_POLICY) {
+                configStore.update {
+                    it.setAudioPolicyPackage(if (it.audioPolicyPackage == pkg) "" else pkg)
+                }
+                return@launch
+            }
             val currentApps = _apps.value
             val appLabel = currentApps.firstOrNull { it.packageName == pkg }?.label ?: pkg
             val isCurrentlySelected = pkg in state.value.whitelist

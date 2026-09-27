@@ -260,6 +260,10 @@ class FloatingWindowService : LifecycleService() {
                     LocalReduceMotion provides cfg.appearance.reduceMotion,
                 ) {
                 FloatingBubbleRoot(
+                    playbackPolicy = cfg.playbackPolicy,
+                    onSetPlaybackPolicy = { policy ->
+                        lifecycleScope.launch { configStore.update { it.setPlaybackPolicy(policy) } }
+                    },
                     mode = mode,
                     panelMaxWidth = with(density) { overlayBounds.width().toDp() },
                     panelMaxHeight = with(density) { overlayBounds.height().toDp() },

@@ -121,5 +121,7 @@ private fun AppConfig.toSnapshot(): ConfigSnapshot = ConfigSnapshot(
     },
     whitelist = whitelistList.toSet(),
     blacklist = blacklistList.toSet(),
-    onboardingCompleted = onboardingCompleted
+    onboardingCompleted = onboardingCompleted,
+    audioPolicyBackend = injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY,
+    audioPolicyPackage = audioPolicyPackage
 )

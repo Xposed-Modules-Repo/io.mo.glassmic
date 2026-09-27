@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -105,7 +106,7 @@ fun ScopeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { vm.syncFromManager(silent = false) }) {
+                    if (!state.audioPolicyBackend) IconButton(onClick = { vm.syncFromManager(silent = false) }) {
                         Icon(
                             Icons.Default.Sync,
                             contentDescription = stringResource(R.string.scope_sync_tooltip)
@@ -118,7 +119,11 @@ fun ScopeScreen(
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
             // LSPosed 动态服务连接状态提示卡
-            LsposedServiceStatusCard(isBound = state.isLsposedServiceBound)
+            if (state.audioPolicyBackend) {
+                Text(stringResource(R.string.backend_scope_hint),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall)
+            } else LsposedServiceStatusCard(isBound = state.isLsposedServiceBound)
 
             // App 选择器（搜索、系统应用开关、应用列表）
             AppPicker(
@@ -255,6 +260,7 @@ private fun AppPicker(
             AppRow(
                 app = app,
                 checked = app.packageName in state.whitelist,
+                singleSelection = state.audioPolicyBackend,
                 onToggle = { onToggleApp(app.packageName) }
             )
         }
@@ -285,6 +291,7 @@ private fun openLSPosedManager(ctx: Context): Boolean {
 private fun AppRow(
     app: AppItem,
     checked: Boolean,
+    singleSelection: Boolean,
     onToggle: () -> Unit
 ) {
     Row(
@@ -294,7 +301,8 @@ private fun AppRow(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        if (singleSelection) RadioButton(selected = checked, onClick = onToggle)
+        else Checkbox(checked = checked, onCheckedChange = { onToggle() })
         Spacer(modifier = Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

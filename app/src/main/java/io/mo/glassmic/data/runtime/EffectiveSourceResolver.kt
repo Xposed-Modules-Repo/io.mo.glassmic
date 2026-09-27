@@ -41,14 +41,14 @@ class EffectiveSourceResolver @Inject constructor(
      *
      * @return REAL_MIC 表示不拦截原始麦克风
      */
-    fun resolve(callerPackage: String): SourceType {
+    fun resolve(callerPackage: String, forAudioPolicy: Boolean = false): SourceType {
         val now = System.currentTimeMillis()
-        val (src, code, desc) = resolveInternal(callerPackage)
+        val (src, code, desc) = resolveInternal(callerPackage, forAudioPolicy)
         recordDecision(DecisionRecord(now, callerPackage, src, code, desc))
         return src
     }
 
-    private fun resolveInternal(callerPackage: String): Triple<SourceType, String, String> {
+    private fun resolveInternal(callerPackage: String, forAudioPolicy: Boolean): Triple<SourceType, String, String> {
         // 1. 安全模式
         if (safeMode.isActive()) {
             return Triple(SourceType.REAL_MIC, "SAFE_MODE", "安全模式已激活 (Safe mode active)")
@@ -59,6 +59,10 @@ class EffectiveSourceResolver @Inject constructor(
         }
         // 3. 首次启动门禁
         val snap = configStore.snapshotBlocking()
+        // Both backends share the same gates, but only the selected backend may replace PCM.
+        if (snap.audioPolicyBackend != forAudioPolicy) {
+            return Triple(SourceType.REAL_MIC, "OTHER_BACKEND", "由另一注入后端处理 (Other backend selected)")
+        }
         if (!snap.onboardingCompleted) {
             return Triple(SourceType.REAL_MIC, "ONBOARDING_INCOMPLETE", "首次引导未完成 (Onboarding incomplete)")
         }
@@ -71,7 +75,9 @@ class EffectiveSourceResolver @Inject constructor(
             return Triple(SourceType.REAL_MIC, "SELF_PACKAGE", "跳过本模块自身进程 (Self package skip)")
         }
         // 6. 生效范围
-        if (!ScopeMatcher.matches(callerPackage, snap)) {
+        val inScope = if (forAudioPolicy) callerPackage.isNotBlank() && callerPackage == snap.audioPolicyPackage
+            else ScopeMatcher.matches(callerPackage, snap)
+        if (!inScope) {
             return Triple(SourceType.REAL_MIC, "SCOPE_FILTERED", "未命中生效范围/白名单 (Scope filtered)")
         }
         // 7. 前台服务 / 运行态必须仍然开启

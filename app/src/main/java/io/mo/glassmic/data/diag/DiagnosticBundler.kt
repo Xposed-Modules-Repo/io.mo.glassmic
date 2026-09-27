@@ -55,6 +55,7 @@ class DiagnosticBundler @Inject constructor(
     private val visibilityCompatRepo: VisibilityCompatRepository,
     private val audioDao: AudioDao,
     private val publisher: Lazy<SharedPcmPublisher>,
+    private val audioPolicy: io.mo.glassmic.root.AudioPolicyController,
     private val playbackSessionDiagnostics: PlaybackSessionDiagnostics
 ) {
 
@@ -65,6 +66,7 @@ class DiagnosticBundler @Inject constructor(
 
         ZipOutputStream(FileOutputStream(target)).use { zip ->
             writeEntry(zip, "summary.json", buildSummary())
+            writeEntry(zip, "audio_policy.json", audioPolicy.diagnostics().toString(2))
             writeEntry(zip, "log.txt", GlassLog.dump())
             writeEntry(zip, "safe_mode.json", buildSafeMode())
             writeEntry(zip, "hook_status.json", buildHook())
@@ -116,6 +118,7 @@ class DiagnosticBundler @Inject constructor(
             })
             put("config", JSONObject().apply {
                 put("global_switch", cfg.globalSwitch)
+                put("injection_backend", cfg.injectionBackend.name)
                 put("scope_mode", cfg.scopeMode.name)
                 put("playback_policy", cfg.playbackPolicy.name)
                 put("onboarding_completed", cfg.onboardingCompleted)

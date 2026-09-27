@@ -43,6 +43,16 @@ message AppConfig {
 
   // Global output filter, shared by imported audio and TTS. Disabled for existing installations.
   AudioBand audio_band = 19;
+
+  // Opt-in backend. Zero preserves existing LSPosed installations.
+  InjectionBackend injection_backend = 20;
+  // Independent selection, so LSPosed scope sync cannot overwrite the root target.
+  string audio_policy_package = 21;
+}
+
+enum InjectionBackend {
+  LSPOSED = 0;
+  AUDIO_POLICY = 1;
 }
 
 message AudioBand {

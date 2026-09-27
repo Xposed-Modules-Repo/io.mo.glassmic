@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="float_policy_once">Once · silence</string>
+    <string name="float_policy_loop">Loop</string>
+    <string name="float_policy_real">Once · mic</string>
+    <string name="backend_title">Injection method</string>
+    <string name="backend_lsposed">LSPosed (default)</string>
+    <string name="backend_audio_policy">AudioPolicy (Root, experimental)</string>
+    <string name="backend_switch_hint">Turn off the main switch before changing methods.</string>
+    <string name="backend_policy_hint">Requires Root permission. Select exactly one regular app in Scope. Audio starts streaming when you play, without waiting for recording; open the target microphone first. Some systems or active recordings may require reopening the microphone to change routes.</string>
+    <string name="backend_idle">Inactive (off or using the real microphone)</string>
+    <string name="backend_starting">Requesting Root and starting injection</string>
+    <string name="backend_active">Audio route registered</string>
+    <string name="backend_stopping">Restoring the microphone</string>
+    <string name="backend_failed">Injection failed; no fallback backend is active</string>
+    <string name="backend_retry">Retry injection</string>
+    <string name="backend_scope_error">Select an AudioPolicy target app in Scope.</string>
+    <string name="backend_scope_hint">AudioPolicy supports one app at a time. Selecting an app replaces the current target. This selection is saved separately from LSPosed and requires no LSPosed scope request.</string>
+    <string name="backend_target_error">System apps, launchers, keyboards and GlassMic are not supported.</string>
+    <string name="backend_shared_uid_error">The target shares a UID with other apps; it cannot be routed independently.</string>
+    <string name="backend_root_error">The Root helper exited before becoming ready. Check Root access and system support.</string>
+    <string name="backend_start_timeout">Root authorization or audio route registration timed out. Check permission and retry.</string>
+    <string name="backend_status_hint">AudioPolicy mode: check the route status below</string>
     <!-- App basics -->
     <string name="app_name">GlassMic</string>
     <string name="xposed_description">GlassMic - Virtual Microphone Testing Module</string>

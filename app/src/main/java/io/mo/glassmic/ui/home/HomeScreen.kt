@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,6 +57,7 @@ fun HomeScreen(
     vm: HomeViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsState()
+    val policyStatus by vm.policyStatus.collectAsState()
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -105,6 +107,15 @@ fun HomeScreen(
                 clickable = true,
                 onClick = onOpenScope
             )
+            if (state.audioPolicyBackend) {
+                Text(
+                    text = "AudioPolicy · " + policyStatus.label(LocalContext.current),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (policyStatus.phase == io.mo.glassmic.root.PolicyPhase.ERROR)
+                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable(onClick = onOpenSettings).padding(vertical = 8.dp)
+                )
+            } else {
             HookStatusRow(
                 label = stringResource(R.string.home_field_hook),
                 activity = state.hookActivity,
@@ -119,6 +130,7 @@ fun HomeScreen(
                 lastMs = state.interceptLastMs,
                 lastPkg = state.interceptLastPkg
             )
+            }
 
             Spacer(modifier = Modifier.weight(1f))
 
@@ -178,7 +190,9 @@ private fun StatusHeroCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = if (state.running)
+                text = if (state.running && state.audioPolicyBackend)
+                    stringResource(R.string.backend_status_hint)
+                else if (state.running)
                     stringResource(R.string.status_using_virtual)
                 else stringResource(R.string.status_using_real),
                 style = MaterialTheme.typography.bodyMedium,

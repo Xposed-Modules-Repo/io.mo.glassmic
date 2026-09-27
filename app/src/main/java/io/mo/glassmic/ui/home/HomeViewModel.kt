@@ -48,7 +48,8 @@ data class HomeUiState(
     val interceptReads: Long = 0L,
     val interceptBytes: Long = 0L,
     val interceptLastMs: Long = 0L,
-    val interceptLastPkg: String? = null
+    val interceptLastPkg: String? = null,
+    val audioPolicyBackend: Boolean = false
 )
 
 @HiltViewModel
@@ -59,10 +60,12 @@ class HomeViewModel @Inject constructor(
     private val bootGate: BootGateRepository,
     private val safeModeRepo: SafeModeRepository,
     private val playback: PlaybackController,
+    audioPolicy: io.mo.glassmic.root.AudioPolicyController,
     audioDao: AudioDao,
     hookStatusRepo: HookStatusRepository,
     audioStatsRepo: AudioStatsRepository
 ) : ViewModel() {
+    val policyStatus = audioPolicy.status
 
     private val groupsFlow = audioDao.observeGroups()
     private val clipsFlow = audioDao.observeAllClips()
@@ -80,6 +83,7 @@ class HomeViewModel @Inject constructor(
         val clip = clips.firstOrNull { it.id == rt.currentAudioId }
         val group = groups.firstOrNull { it.id == rt.currentGroupId }
         HomeUiState(
+            audioPolicyBackend = cfg.injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY,
             running = rt.enabled && !rt.safeMode && bootGate.userEnabledAfterBoot(),
             hasFileSource = (rt.currentSourceType == SourceType.FILE && clip != null) || (rt.currentSourceType == SourceType.TTS && rt.durationMs > 0),
             paused = rt.paused,
@@ -96,7 +100,9 @@ class HomeViewModel @Inject constructor(
                 ProtoPolicy.REAL_MIC -> AppLocale.string(context, R.string.library_policy_real_mic)
                 else -> AppLocale.string(context, R.string.library_policy_loop)
             },
-            scopeLabel = if (cfg.whitelistCount > 0) {
+            scopeLabel = if (cfg.injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY) {
+                cfg.audioPolicyPackage.ifBlank { AppLocale.string(context, R.string.scope_none_selected) }
+            } else if (cfg.whitelistCount > 0) {
                 AppLocale.string(context, R.string.home_scope_whitelist_count, cfg.whitelistCount)
             } else {
                 AppLocale.string(context, R.string.scope_none_selected)

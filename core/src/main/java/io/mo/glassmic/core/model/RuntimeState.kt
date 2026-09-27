@@ -27,5 +27,7 @@ data class ConfigSnapshot(
     val scopeMode: ScopeMode,
     val whitelist: Set<String>,
     val blacklist: Set<String>,
-    val onboardingCompleted: Boolean
+    val onboardingCompleted: Boolean,
+    val audioPolicyBackend: Boolean = false,
+    val audioPolicyPackage: String = ""
 )

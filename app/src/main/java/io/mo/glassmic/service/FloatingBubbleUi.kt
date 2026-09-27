@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -84,6 +86,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.mo.glassmic.R
+import io.mo.glassmic.proto.PlaybackPolicy
 import io.mo.glassmic.ui.theme.LocalGlassEnabled
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.flow.Flow
@@ -120,6 +123,8 @@ fun FloatingBubbleRoot(
     isStreaming: Boolean = false,
     audioMonitorEnabled: Boolean = false,
     onToggleAudioMonitor: () -> Unit = {},
+    playbackPolicy: PlaybackPolicy = PlaybackPolicy.SILENCE,
+    onSetPlaybackPolicy: (PlaybackPolicy) -> Unit = {},
     positionMs: Long,
     durationMs: Long,
     currentName: String?,
@@ -176,6 +181,8 @@ fun FloatingBubbleRoot(
         )
 
         FloatMode.MINI_BAR -> MiniBar(
+            playbackPolicy = playbackPolicy,
+            onSetPlaybackPolicy = onSetPlaybackPolicy,
             paused = paused,
             isStreaming = isStreaming,
             audioMonitorEnabled = audioMonitorEnabled,
@@ -216,6 +223,8 @@ fun FloatingBubbleRoot(
                     }
                 }
             ) {
+                PlaybackPolicyChip(playbackPolicy, onSetPlaybackPolicy)
+                Spacer(Modifier.height(6.dp))
                 if (onTts) {
                     TtsTab(
                         text = ttsDraft,
@@ -523,6 +532,8 @@ private fun Ball(
 // ============ 迷你播放条 ============
 @Composable
 private fun MiniBar(
+    playbackPolicy: PlaybackPolicy,
+    onSetPlaybackPolicy: (PlaybackPolicy) -> Unit,
     paused: Boolean,
     isStreaming: Boolean,
     audioMonitorEnabled: Boolean,
@@ -608,6 +619,7 @@ private fun MiniBar(
             )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(formatMs(positionMs), color = OverlayColors.OnDarkDim, fontSize = 11.sp)
+                PlaybackPolicyChip(playbackPolicy, onSetPlaybackPolicy)
                 Text(
                     stringResource(R.string.float_collapse),
                     color = OverlayColors.OnDarkDim,
@@ -615,6 +627,35 @@ private fun MiniBar(
                     modifier = Modifier.clickable(onClick = onCollapse)
                 )
                 Text(formatMs(durationMs), color = OverlayColors.OnDarkDim, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackPolicyChip(policy: PlaybackPolicy, onSelect: (PlaybackPolicy) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val choices = listOf(
+        PlaybackPolicy.SILENCE to stringResource(R.string.float_policy_once),
+        PlaybackPolicy.LOOP to stringResource(R.string.float_policy_loop),
+        PlaybackPolicy.REAL_MIC to stringResource(R.string.float_policy_real)
+    )
+    Box {
+        Text(
+            text = choices.firstOrNull { it.first == policy }?.second ?: choices.first().second,
+            color = OverlayColors.Accent,
+            fontSize = 11.sp,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                .background(OverlayColors.FillStrong)
+                .clickable { expanded = true }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            choices.forEach { (value, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = {
+                    expanded = false
+                    onSelect(value)
+                })
             }
         }
     }

@@ -17,6 +17,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.proto.AppConfig
+import io.mo.glassmic.proto.InjectionBackend
+import io.mo.glassmic.root.AudioPolicyController
+import io.mo.glassmic.root.PolicyPhase
+import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.audio.BandSettings
 import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.proto.FloatingSize
@@ -53,8 +57,24 @@ class SettingsViewModel @Inject constructor(
     private val floatingIconStore: FloatingIconStore,
     private val audioStatsRepo: AudioStatsRepository,
     private val visibilityCompatRepo: VisibilityCompatRepository,
+    private val audioPolicy: AudioPolicyController,
+    private val runtime: RuntimeStateHolder,
     hookStatusRepo: HookStatusRepository
 ) : ViewModel() {
+
+    val policyStatus = audioPolicy.status
+    val runtimeState = runtime.flow
+
+    fun setBackend(backend: InjectionBackend) = viewModelScope.launch {
+        if (runtime.value.enabled ||
+            policyStatus.value.phase in listOf(PolicyPhase.STARTING, PolicyPhase.ACTIVE, PolicyPhase.STOPPING)) return@launch
+        // A killed process can leave global_switch persisted while the actual service is off.
+        // Also cancel a queued service start before replacing the backend.
+        io.mo.glassmic.service.GlassForegroundService.stop(context)
+        configStore.update { it.setGlobalSwitch(false).setInjectionBackend(backend) }
+    }
+
+    fun retryAudioPolicy() = audioPolicy.retry()
 
     private val _visibilityCompat = MutableStateFlow(visibilityCompatRepo.isEnabled())
     /** 「严格 ROM 兼容」开关状态，UI 单独 collect。 */
