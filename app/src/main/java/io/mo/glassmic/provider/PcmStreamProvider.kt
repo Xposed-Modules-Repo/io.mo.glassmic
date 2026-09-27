@@ -10,11 +10,13 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import io.mo.glassmic.audio.SharedPcmPublisher
+import io.mo.glassmic.data.diag.AudioTapStore
 
 /**
  * 给 Xposed 进程读取当前 PCM 流。
  *
  * URI: content://io.mo.glassmic.provider.pcm/stream?sr=48000&ch=1
+ *      content://io.mo.glassmic.provider.pcm/tap?pid=123（调试回放抓取，见 AudioTapStore）
  *
  * 设计说明详见 SharedPcmPublisher：用 pipe 而非 mmap，避免 chmod 与
  * WORLD_READABLE 风险。调用方关闭 fd 即触发 EOF，写线程自动清理。
@@ -25,13 +27,20 @@ class PcmStreamProvider : ContentProvider() {
     @InstallIn(SingletonComponent::class)
     interface PcmEntryPoint {
         fun publisher(): SharedPcmPublisher
+        fun audioTapStore(): AudioTapStore
     }
 
     override fun onCreate(): Boolean = true
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        require(mode == "r") { "PcmStreamProvider 只支持只读" }
         val callerPkg = callingPackage ?: "unknown"
+        if (uri.path == "/tap") {
+            // 调试回放抓取：仅 DEBUG 日志级别下接受，否则抛 FileNotFoundException 让 hook 侧退避。
+            require(mode == "w") { "tap 只支持只写" }
+            val pid = uri.getQueryParameter("pid")?.toIntOrNull() ?: 0
+            return entryPoint().audioTapStore().openSink(callerPkg, pid)
+        }
+        require(mode == "r") { "PcmStreamProvider 只支持只读" }
         val sampleRate = uri.getQueryParameter("sr")?.toIntOrNull() ?: 48000
         val channels = uri.getQueryParameter("ch")?.toIntOrNull() ?: 1
 

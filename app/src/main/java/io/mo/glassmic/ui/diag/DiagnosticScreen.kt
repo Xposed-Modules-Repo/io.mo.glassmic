@@ -384,6 +384,24 @@ fun DiagnosticScreen(
                         label = stringResource(R.string.settings_clear_log),
                         onClick = vm::clearLog
                     )
+                    if (state.config.logging.level == LogLevel.DEBUG) {
+                        DiagButtonRow(
+                            label = stringResource(R.string.diag_tap_export),
+                            busy = state.exporting,
+                            busyText = stringResource(R.string.diag_exporting),
+                            onClick = vm::exportAudioTap
+                        )
+                        DiagButtonRow(
+                            label = stringResource(R.string.diag_tap_clear),
+                            onClick = vm::clearAudioTap
+                        )
+                        Text(
+                            stringResource(R.string.diag_tap_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        )
+                    }
                 }
             }
 

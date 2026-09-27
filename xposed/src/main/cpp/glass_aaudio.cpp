@@ -1,4 +1,5 @@
 #include "glass_aaudio.h"
+#include "glass_audio_tap.h"
 #include "glass_pcm_broadcast.h"
 #include "glass_log.h"
 
@@ -438,6 +439,9 @@ static FillResult fill_pcm_impl(
         g_pending_underruns.fetch_add(1, std::memory_order_relaxed);
         g_pending_missing_frames.fetch_add(missing, std::memory_order_relaxed);
     }
+
+    tap_capture(buffer, dst_fmt, dst_channels, dst_sample_rate, numFrames,
+        static_cast<int32_t>(path), stream_id, missing);
 
     g_pending_reads.fetch_add(1, std::memory_order_relaxed);
     g_pending_bytes.fetch_add(static_cast<uint64_t>(got), std::memory_order_relaxed);

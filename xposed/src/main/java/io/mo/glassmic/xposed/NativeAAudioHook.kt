@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.bytedance.shadowhook.ShadowHook
 import io.mo.glassmic.core.Constants
@@ -32,6 +33,7 @@ object NativeAAudioHook {
     private const val POLL_INTERVAL_MS = 80L
     private const val PCM_OPEN_ACTIVITY_WINDOW_MS = 500L
     private const val PCM_CLOSE_IDLE_MS = 1_500L
+    private const val TAP_RETRY_MS = 15_000L
 
     private val installed = AtomicBoolean(false)
     @Volatile private var pollerStarted = false
@@ -40,6 +42,10 @@ object NativeAAudioHook {
     @Volatile private var pushedFdSr: Int = 0
     @Volatile private var pushedFdCh: Int = 0
     @Volatile private var hasPushedFd: Boolean = false
+
+    // 调试抓取：GlassMic 仅在日志级别为 DEBUG 时接受 /tap，其余情况按退避间隔重试。
+    @Volatile private var hasTapFd: Boolean = false
+    private var tapRetryAtMs = 0L
 
     fun install(ctx: Context, callerPackage: String): Boolean {
         if (!installed.compareAndSet(false, true)) return true
@@ -204,6 +210,8 @@ object NativeAAudioHook {
                             )
                         }
                     }
+                    // 抓取跟随 FILE 决策而非录音心跳，才能录到录音刚开始、PCM fd 尚未打开时的补零。
+                    if (needsPcm) ensureTapFd(ctx, now) else closeTapFd()
 
                     // 4.4 上报统计——全欠载时 bytes=0 也必须上报，否则诊断会停留在旧数据。
                     if (stats != null && stats.size >= 4 && reads > 0) {
@@ -237,6 +245,7 @@ object NativeAAudioHook {
                     Thread.sleep(POLL_INTERVAL_MS)
                 } catch (_: InterruptedException) {
                     closePcmFd(ctx, callerPackage, "poller interrupted")
+                    closeTapFd()
                     return@thread
                 }
             }
@@ -265,13 +274,7 @@ object NativeAAudioHook {
             return
         }
 
-        // detachFd 后 PFD 不再持有 fd 所有权，由 native 负责 close。
-        val fd = if (Build.VERSION.SDK_INT >= 33) {
-            runCatching { pfd.detachFd() }.getOrDefault(-1)
-        } else {
-            runCatching { nativeDupFd(pfd.fileDescriptor) }.getOrDefault(-1)
-        }
-        runCatching { pfd.close() }
+        val fd = takeFd(pfd)
         if (fd < 0) {
             XBridge.reportDiagnosticEvent(
                 ctx,
@@ -322,6 +325,43 @@ object NativeAAudioHook {
         )
     }
 
+    private fun ensureTapFd(ctx: Context, now: Long) {
+        if (hasTapFd) {
+            if (nativeTapActive()) return
+            // native 写端出错（GlassMic 侧已关闭或达到上限），按退避重新申请。
+            hasTapFd = false
+            tapRetryAtMs = now + TAP_RETRY_MS
+            return
+        }
+        if (now < tapRetryAtMs) return
+        tapRetryAtMs = now + TAP_RETRY_MS
+        val uri = Uri.parse("content://${Constants.PROVIDER_PCM}/tap?pid=${android.os.Process.myPid()}")
+        val pfd = runCatching { ctx.contentResolver.openFileDescriptor(uri, "w") }.getOrNull() ?: return
+        val fd = takeFd(pfd)
+        if (fd < 0) return
+        nativeSetTapFd(fd)
+        hasTapFd = true
+        android.util.Log.i(TAG, "audio tap opened: fd=$fd")
+    }
+
+    private fun closeTapFd() {
+        if (!hasTapFd) return
+        nativeSetTapFd(-1)
+        hasTapFd = false
+        tapRetryAtMs = 0L
+    }
+
+    /** detachFd 后 PFD 不再持有 fd 所有权，由 native 负责 close。 */
+    private fun takeFd(pfd: ParcelFileDescriptor): Int {
+        val fd = if (Build.VERSION.SDK_INT >= 33) {
+            runCatching { pfd.detachFd() }.getOrDefault(-1)
+        } else {
+            runCatching { nativeDupFd(pfd.fileDescriptor) }.getOrDefault(-1)
+        }
+        runCatching { pfd.close() }
+        return fd
+    }
+
     private fun pathName(code: Int): String = when (code) {
         1 -> "AAudio.read"
         2 -> "AAudio.callback"
@@ -336,4 +376,6 @@ object NativeAAudioHook {
     @JvmStatic private external fun nativeSetPcmFd(fd: Int, sampleRate: Int, channels: Int)
     @JvmStatic private external fun nativeDrainStats(): LongArray?
     @JvmStatic private external fun nativeDupFd(fd: java.io.FileDescriptor): Int
+    @JvmStatic private external fun nativeSetTapFd(fd: Int)
+    @JvmStatic private external fun nativeTapActive(): Boolean
 }

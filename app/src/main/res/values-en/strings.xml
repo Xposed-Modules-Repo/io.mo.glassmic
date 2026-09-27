@@ -181,6 +181,9 @@
     <string name="settings_log_debug">Debug</string>
     <string name="settings_export_diag">Export Diagnostic Bundle</string>
     <string name="settings_clear_log">Clear In-Memory Log</string>
+    <string name="diag_tap_export">Export Playback Capture (WAV)</string>
+    <string name="diag_tap_clear">Clear Playback Capture</string>
+    <string name="diag_tap_hint">At Debug level, GlassMic records the exact audio it hands to the target app (injected audio only, never the real microphone) so you can tell whether gaps come from GlassMic or from the app itself. Captures are not included in the diagnostic bundle and are exported separately.</string>
     <string name="settings_pipeline_probe">Test Audio Pipeline (Local)</string>
     <string name="settings_pipeline_probe_hint">Opens the PCM channel locally for 1 second to check whether the app-side pipeline works</string>
     <string name="settings_section_intercept">Intercept Stats</string>

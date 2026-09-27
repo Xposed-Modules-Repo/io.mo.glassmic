@@ -1,4 +1,5 @@
 #include "glass_aaudio.h"
+#include "glass_audio_tap.h"
 #include "glass_opensl.h"
 #include "glass_audiorecord.h"
 #include "glass_log.h"
@@ -46,6 +47,17 @@ Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeSetPcmFd(
     JNIEnv* env, jclass, jint fd, jint sample_rate, jint channels
 ) {
     set_pcm_fd(fd, sample_rate, channels);
+}
+
+/** 调试抓取 fd（socketpair 写端），所有权交给 native；-1 关闭。 */
+JNIEXPORT void JNICALL
+Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeSetTapFd(JNIEnv* env, jclass, jint fd) {
+    set_tap_fd(fd);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_mo_glassmic_xposed_NativeAAudioHook_nativeTapActive(JNIEnv* env, jclass) {
+    return tap_active() ? JNI_TRUE : JNI_FALSE;
 }
 
 /**

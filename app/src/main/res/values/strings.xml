@@ -181,6 +181,9 @@
     <string name="settings_log_debug">调试</string>
     <string name="settings_export_diag">导出诊断包</string>
     <string name="settings_clear_log">清空内存日志</string>
+    <string name="diag_tap_export">导出回放抓取（WAV）</string>
+    <string name="diag_tap_clear">清空回放抓取</string>
+    <string name="diag_tap_hint">调试级别下会自动录下 GlassMic 实际交给目标 App 的音频（仅注入的音频，不含真实麦克风），用于判断断音发生在 GlassMic 还是目标 App 内部。抓取不会放进诊断包，需单独导出。</string>
     <string name="settings_pipeline_probe">测试音频管线（本地）</string>
     <string name="settings_pipeline_probe_hint">本地打开 PCM 通道读 1 秒，判断 App 侧管线是否通</string>
     <string name="settings_section_intercept">劫持统计</string>

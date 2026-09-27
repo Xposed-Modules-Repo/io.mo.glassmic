@@ -15,6 +15,7 @@ import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.db.AudioClipEntity
 import io.mo.glassmic.data.db.AudioDao
 import io.mo.glassmic.data.diag.AudioPipelineProbe
+import io.mo.glassmic.data.diag.AudioTapStore
 import io.mo.glassmic.data.diag.DiagnosticBundler
 import io.mo.glassmic.data.runtime.AudioInterceptStats
 import io.mo.glassmic.data.runtime.AudioStatsRepository
@@ -97,6 +98,7 @@ class DiagnosticViewModel @Inject constructor(
     private val audioDao: AudioDao,
     private val probe: AudioPipelineProbe,
     private val bundler: DiagnosticBundler,
+    private val audioTapStore: AudioTapStore,
     private val visibilityCompatRepo: VisibilityCompatRepository
 ) : ViewModel() {
 
@@ -293,6 +295,20 @@ class DiagnosticViewModel @Inject constructor(
             .onSuccess { _exportedUri.value = bundler.shareUri(it) }
             .onFailure { _exportError.value = it.message ?: "导出失败" }
         _exporting.value = false
+    }
+
+    // ============ 回放抓取导出 ============
+    fun exportAudioTap() = viewModelScope.launch {
+        _exporting.value = true
+        _exportError.value = null
+        runCatching { audioTapStore.export() }
+            .onSuccess { _exportedUri.value = bundler.shareUri(it) }
+            .onFailure { _exportError.value = it.message ?: "导出失败" }
+        _exporting.value = false
+    }
+
+    fun clearAudioTap() = viewModelScope.launch(Dispatchers.IO) {
+        audioTapStore.clear()
     }
 
     fun consumeExport() {

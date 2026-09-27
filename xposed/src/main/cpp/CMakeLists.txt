@@ -12,6 +12,7 @@ add_library(glassmic_native SHARED
     glass_aaudio.cpp
     glass_opensl.cpp
     glass_audiorecord.cpp
+    glass_audio_tap.cpp
 )
 
 target_include_directories(glassmic_native PRIVATE
