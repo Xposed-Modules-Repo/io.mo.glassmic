@@ -20,7 +20,9 @@ $classpath = @(
     (Join-Path $repo 'xposed\build\tmp\kotlin-classes\debug'),
     $stdlib.FullName, $out
 ) -join [IO.Path]::PathSeparator
-& javac -encoding UTF-8 -cp $classpath -d $out (Join-Path $PSScriptRoot 'AudioRegression.java')
+& javac -encoding UTF-8 -cp $classpath -d $out (Join-Path $PSScriptRoot 'AudioRegression.java') (Join-Path $PSScriptRoot 'TapTimingRegression.java')
 if ($LASTEXITCODE -ne 0) { throw 'Audio regression compilation failed.' }
 & java -cp $classpath AudioRegression
 if ($LASTEXITCODE -ne 0) { throw 'Audio regressions failed.' }
+& java -cp $classpath TapTimingRegression
+if ($LASTEXITCODE -ne 0) { throw 'Tap timing regressions failed.' }

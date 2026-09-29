@@ -113,7 +113,7 @@ class AudioTapStore @Inject constructor(
         }
     }
 
-    /** 把所有抓取转换成 WAV（每个录音流一个）+ index.json，打包到 diagnostics/ 供分享。 */
+    /** 导出 WAV、逐记录时序 JSONL 和 index.json；旧版原始抓取也包含所需时间戳。 */
     suspend fun export(): File = withContext(Dispatchers.IO) {
         val raws = rawFiles()
         if (raws.isEmpty()) throw IllegalStateException("没有可导出的回放抓取，请先在 DEBUG 日志级别下复现问题")
@@ -128,8 +128,10 @@ class AudioTapStore @Inject constructor(
                 zip.putNextEntry(ZipEntry("index.json"))
                 zip.write(JSONObject().apply {
                     put("generated_at", System.currentTimeMillis())
-                    put("note", "WAV 为 GlassMic 实际交给目标 App 的 PCM（转 PCM16）。gaps=GlassMic 补零；" +
-                        "stalls=目标 App 未按时取数；tap_loss=抓取自身丢失，非交付断音。wav_ms 为该流 WAV 内的位置。")
+                    put("note", "WAV 为交给目标 App 回调前的 PCM（转 PCM16），按样本拼接，不保留实际交付间隔；" +
+                        "WAV 连贯不能排除时序问题。timing_file 为逐记录时间戳，timing 为间隔统计；" +
+                        "gaps=GlassMic 补零；stalls=间隔超过上一块时长 50ms；tap_loss=抓取丢失，非交付断音。" +
+                        "间隔偏差不等同于丢音，也可能是系统批量回调。wav_ms 为该流 WAV 内的位置。")
                     put("files", index)
                 }.toString(2).toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
@@ -158,9 +160,7 @@ class AudioTapStore @Inject constructor(
         var frames = 0L
         var records = 0L
         var missingFrames = 0L
-        var lastSeq = -1L
-        var lastMonoNs = 0L
-        var lastFrames = 0
+        val timing = TapTimingStats(sampleRate)
         var firstRealtimeMs = 0L
         val gaps = JSONArray()
         val stalls = JSONArray()
@@ -180,102 +180,124 @@ class AudioTapStore @Inject constructor(
         var firstRealtime = 0L
         var lastRealtime = 0L
         var segments = 0
+        val timingFile = File(work, "$base.timing.jsonl")
 
-        DataInputStream(BufferedInputStream(FileInputStream(raw), 256 * 1024)).use { input ->
-            val head = ByteArray(HEADER_BYTES)
-            val hb = ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN)
-            var payload = ByteArray(0)
-            while (true) {
-                try {
-                    input.readFully(head)
-                } catch (_: EOFException) {
-                    break
-                }
-                hb.rewind()
-                val magic = hb.int
-                if (magic != MAGIC) { truncated = true; break }
-                hb.short // version
-                val headerBytes = hb.short.toInt() and 0xFFFF
-                val seq = hb.int.toLong() and 0xFFFFFFFFL
-                val slot = hb.short.toInt() and 0xFFFF
-                val path = hb.short.toInt() and 0xFFFF
-                val sr = hb.int
-                val ch = hb.short.toInt() and 0xFFFF
-                val fmt = hb.short.toInt() and 0xFFFF
-                val frames = hb.int
-                val missing = hb.int
-                val realtimeMs = hb.long
-                val monoNs = hb.long
-                val payloadBytes = hb.int
-                if (headerBytes > HEADER_BYTES) input.skipBytes(headerBytes - HEADER_BYTES)
-                if (payload.size < payloadBytes) payload = ByteArray(payloadBytes)
-                try {
-                    input.readFully(payload, 0, payloadBytes)
-                } catch (_: EOFException) {
-                    truncated = true
-                    break
-                }
-                if (sr <= 0 || ch <= 0) continue
-                if (firstRealtime == 0L) firstRealtime = realtimeMs
-                lastRealtime = realtimeMs
-
-                // seq 是进程内全局计数，跳号说明抓取环形缓冲满或锁竞争丢了记录。
-                val lost = if (lastSeq >= 0) seq - lastSeq - 1 else 0L
-                lastSeq = seq
-                if (lost > 0) totalLostRecords += lost
-
-                var s = streams[slot]
-                if (s != null && (s.sampleRate != sr || s.channels != ch)) {
-                    finished.put(finish(s))
-                    s = null
-                }
-                if (s == null) {
-                    val segment = segments++
-                    val name = "${base}_s${slot}_seg$segment.wav"
-                    s = StreamState(slot, segment, sr, ch, path, fmt, WavWriter(File(work, name), sr, ch))
-                    s.firstRealtimeMs = realtimeMs
-                    streams[slot] = s
-                }
-
-                if (lost > 0) addEvent(s.tapLoss, JSONObject().apply {
-                    put("wav_ms", s.wavMs()); put("time", realtimeMs); put("lost_records", lost)
-                })
-                if (s.lastMonoNs > 0L) {
-                    val expectedMs = s.lastFrames * 1000L / sr
-                    val deltaMs = (monoNs - s.lastMonoNs) / 1_000_000L
-                    if (deltaMs - expectedMs > STALL_TOLERANCE_MS) addEvent(s.stalls, JSONObject().apply {
-                        put("wav_ms", s.wavMs()); put("time", realtimeMs)
-                        put("interval_ms", deltaMs); put("expected_ms", expectedMs)
-                    })
-                }
-                if (missing > 0) {
-                    val gap = s.openGap
-                    if (gap != null) {
-                        gap.put("missing_ms", gap.getLong("missing_ms") + missing * 1000L / sr)
-                        gap.put("records", gap.getInt("records") + 1)
-                    } else {
-                        val g = JSONObject().apply {
-                            put("wav_ms", s.wavMs()); put("time", realtimeMs)
-                            put("missing_ms", missing * 1000L / sr); put("records", 1)
-                        }
-                        if (addEvent(s.gaps, g)) s.openGap = g
+        timingFile.bufferedWriter().use { timingWriter ->
+            DataInputStream(BufferedInputStream(FileInputStream(raw), 256 * 1024)).use { input ->
+                val head = ByteArray(HEADER_BYTES)
+                val hb = ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN)
+                var payload = ByteArray(0)
+                while (true) {
+                    try {
+                        input.readFully(head)
+                    } catch (_: EOFException) {
+                        break
                     }
-                } else {
-                    s.openGap = null
-                }
+                    hb.rewind()
+                    val magic = hb.int
+                    if (magic != MAGIC) { truncated = true; break }
+                    hb.short // version
+                    val headerBytes = hb.short.toInt() and 0xFFFF
+                    val seq = hb.int.toLong() and 0xFFFFFFFFL
+                    val slot = hb.short.toInt() and 0xFFFF
+                    val path = hb.short.toInt() and 0xFFFF
+                    val sr = hb.int
+                    val ch = hb.short.toInt() and 0xFFFF
+                    val fmt = hb.short.toInt() and 0xFFFF
+                    val frames = hb.int
+                    val missing = hb.int
+                    val realtimeMs = hb.long
+                    val monoNs = hb.long
+                    val payloadBytes = hb.int
+                    if (headerBytes > HEADER_BYTES) input.skipBytes(headerBytes - HEADER_BYTES)
+                    if (payload.size < payloadBytes) payload = ByteArray(payloadBytes)
+                    try {
+                        input.readFully(payload, 0, payloadBytes)
+                    } catch (_: EOFException) {
+                        truncated = true
+                        break
+                    }
+                    if (sr <= 0 || ch <= 0 || frames <= 0) continue
+                    if (firstRealtime == 0L) firstRealtime = realtimeMs
+                    lastRealtime = realtimeMs
 
-                s.wav.write(payload, payloadBytes)
-                s.frames += frames
-                s.records++
-                s.missingFrames += missing
-                s.lastMonoNs = monoNs
-                s.lastFrames = frames
+                    // seq 是进程内全局计数，跳号说明抓取环形缓冲满或锁竞争丢了记录。
+                    val lost = if (lastSeq >= 0) seq - lastSeq - 1 else 0L
+                    lastSeq = seq
+                    if (lost > 0) totalLostRecords += lost
+
+                    var s = streams[slot]
+                    if (s != null && (s.sampleRate != sr || s.channels != ch || s.path != path || s.srcFormat != fmt)) {
+                        finished.put(finish(s))
+                        s = null
+                    }
+                    if (s == null) {
+                        val segment = segments++
+                        val name = "${base}_s${slot}_seg$segment.wav"
+                        s = StreamState(slot, segment, sr, ch, path, fmt, WavWriter(File(work, name), sr, ch))
+                        s.firstRealtimeMs = realtimeMs
+                        streams[slot] = s
+                    }
+
+                    if (lost > 0) addEvent(s.tapLoss, JSONObject().apply {
+                        put("wav_ms", s.wavMs()); put("time", realtimeMs); put("lost_records", lost)
+                    })
+                    val interval = s.timing.observe(monoNs, frames, totalLostRecords)
+                    timingWriter.write(JSONObject().apply {
+                        put("seq", seq)
+                        put("slot", slot)
+                        put("segment", s.segment)
+                        put("path", path)
+                        put("sample_rate", sr)
+                        put("channels", ch)
+                        put("src_format", fmt)
+                        put("wav_frame", s.frames)
+                        put("frames", frames)
+                        put("missing_frames", missing)
+                        put("time", realtimeMs)
+                        // Decimal string preserves nanoseconds in JavaScript JSON consumers.
+                        put("monotonic_ns", monoNs.toString())
+                        put("tap_lost_records_total", totalLostRecords)
+                        put("interval_ns", interval?.actualNs ?: JSONObject.NULL)
+                        put("expected_interval_ns", interval?.expectedNs ?: JSONObject.NULL)
+                        put("interval_error_ns", interval?.errorNs ?: JSONObject.NULL)
+                    }.toString())
+                    timingWriter.newLine()
+                    if (interval != null) {
+                        if (interval.errorNs > STALL_TOLERANCE_MS * 1_000_000L) addEvent(s.stalls, JSONObject().apply {
+                            put("wav_ms", s.wavMs()); put("time", realtimeMs)
+                            put("interval_ms", interval.actualNs / 1_000_000.0)
+                            put("expected_ms", interval.expectedNs / 1_000_000.0)
+                        })
+                    }
+                    if (missing > 0) {
+                        val gap = s.openGap
+                        if (gap != null) {
+                            gap.put("missing_ms", gap.getLong("missing_ms") + missing * 1000L / sr)
+                            gap.put("records", gap.getInt("records") + 1)
+                        } else {
+                            val g = JSONObject().apply {
+                                put("wav_ms", s.wavMs()); put("time", realtimeMs)
+                                put("missing_ms", missing * 1000L / sr); put("records", 1)
+                            }
+                            if (addEvent(s.gaps, g)) s.openGap = g
+                        }
+                    } else {
+                        s.openGap = null
+                    }
+
+                    s.wav.write(payload, payloadBytes)
+                    s.frames += frames
+                    s.records++
+                    s.missingFrames += missing
+                }
             }
         }
         streams.values.forEach { finished.put(finish(it)) }
 
         return JSONObject().apply {
             put("source", raw.name)
+            put("timing_file", timingFile.name)
             put("first_record_time", firstRealtime)
             put("last_record_time", lastRealtime)
             put("tap_lost_records", totalLostRecords)
@@ -295,6 +317,7 @@ class AudioTapStore @Inject constructor(
         return JSONObject().apply {
             put("wav", s.wav.file.name)
             put("slot", s.slot)
+            put("segment", s.segment)
             put("path", when (s.path) {
                 1 -> "AAudio.read"; 2 -> "AAudio.callback"; 3 -> "AudioRecord.native"; 4 -> "OpenSL.callback"
                 else -> "unknown"
@@ -309,6 +332,21 @@ class AudioTapStore @Inject constructor(
             put("gaps", s.gaps)
             put("stalls", s.stalls)
             put("tap_loss", s.tapLoss)
+            put("timing", JSONObject().apply {
+                val t = s.timing
+                put("intervals", t.intervals)
+                put("excluded_intervals", t.excludedIntervals)
+                put("min_interval_ms", if (t.intervals > 0) t.minIntervalNs / 1_000_000.0 else JSONObject.NULL)
+                put("max_interval_ms", if (t.intervals > 0) t.maxIntervalNs / 1_000_000.0 else JSONObject.NULL)
+                put("mean_interval_ms", t.meanIntervalNs / 1_000_000.0)
+                put("mean_absolute_error_ms", t.meanAbsoluteErrorNs / 1_000_000.0)
+                put("max_late_ms", t.maxLateNs / 1_000_000.0)
+                put("max_early_ms", t.maxEarlyNs / 1_000_000.0)
+                put("deviation_over_5ms", t.deviationOver5Ms)
+                put("deviation_over_10ms", t.deviationOver10Ms)
+                put("deviation_over_20ms", t.deviationOver20Ms)
+                put("deviation_over_50ms", t.deviationOver50Ms)
+            })
         }
     }
 

@@ -273,7 +273,7 @@ class DiagnosticBundler @Inject constructor(
             }
             captureActive && !publisherJson.optBoolean("paused", false) -> {
                 stage = "DOWNSTREAM_APP_DSP_OR_NETWORK"
-                summary = "当前内部链路未记录明显丢帧/欠载；若远端仍缺音，优先怀疑目标 App 后处理、VAD/降噪、编码或网络链路。"
+                summary = "当前未记录明显丢帧/欠载，但尚未排除交付时序问题；需结合回放抓取的 timing 与远端录音，区分回调时序和目标 App 后处理、编码或网络链路。"
             }
             else -> {
                 stage = "INSUFFICIENT_DATA"
@@ -309,6 +309,7 @@ class DiagnosticBundler @Inject constructor(
                     "NATIVE_BUFFER" -> {
                         put("查看 audio_stats.json 的 last_underrun/last_overrun 与 path")
                         put("对照 audio_timeline.json 中 native_gap_detected 与 pcm_fd_opened/closed")
+                        put("若欠载仅出现在开麦/切源附近，不足以解释持续断音；继续核对回放抓取 timing")
                     }
                     "JAVA_PIPE" -> {
                         put("查看 pcm_read_diagnostics.latest 的 short_reads/errors/zero_fill_pcm16_bytes")
@@ -318,6 +319,7 @@ class DiagnosticBundler @Inject constructor(
                         put("检查音频频段、增益、混响、变速等 DSP 设置")
                     }
                     "DOWNSTREAM_APP_DSP_OR_NETWORK" -> {
+                        put("导出回放抓取，查看 index.json 的 timing 和 timing_file；WAV 拼接会隐藏交付间隔")
                         put("对照远端录音的缺音时间，检查目标 App VAD/降噪/AGC/编码链路")
                         put("若只在音乐/背景声发生，优先测试语音后处理假设")
                     }
