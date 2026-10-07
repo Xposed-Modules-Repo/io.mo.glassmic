@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.R
+import io.mo.glassmic.data.config.audioPolicyTargets
 import io.mo.glassmic.data.diag.AudioPipelineProbe
 import io.mo.glassmic.proto.AppLanguage
 import io.mo.glassmic.proto.InjectionBackend
@@ -257,7 +258,13 @@ fun SettingsScreen(
 
             item { Section(stringResource(R.string.scope_title)) {
                 val scopeSubtitle = if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
-                    cfg.audioPolicyPackage.ifBlank { stringResource(R.string.scope_none_selected) }
+                    val targets = cfg.audioPolicyTargets()
+                    when {
+                        cfg.audioPolicyAllApps -> stringResource(R.string.scope_all_apps_selected)
+                        targets.isEmpty() -> stringResource(R.string.scope_none_selected)
+                        targets.size == 1 -> targets.first()
+                        else -> stringResource(R.string.home_scope_whitelist_count, targets.size)
+                    }
                 } else if (cfg.whitelistCount > 0) {
                     stringResource(R.string.home_scope_whitelist_count, cfg.whitelistCount)
                 } else {

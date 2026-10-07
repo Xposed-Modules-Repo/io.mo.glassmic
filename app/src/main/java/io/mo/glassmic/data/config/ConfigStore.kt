@@ -123,5 +123,10 @@ private fun AppConfig.toSnapshot(): ConfigSnapshot = ConfigSnapshot(
     blacklist = blacklistList.toSet(),
     onboardingCompleted = onboardingCompleted,
     audioPolicyBackend = injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY,
-    audioPolicyPackage = audioPolicyPackage
+    audioPolicyPackages = audioPolicyTargets(),
+    audioPolicyAllApps = audioPolicyAllApps
 )
+
+/** AudioPolicy 选中的目标应用；兼容旧版单选字段 `audio_policy_package`。 */
+fun AppConfig.audioPolicyTargets(): Set<String> =
+    (audioPolicyPackagesList + audioPolicyPackage).filter { it.isNotBlank() }.toSet()

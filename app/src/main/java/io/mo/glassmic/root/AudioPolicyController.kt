@@ -1,8 +1,12 @@
 package io.mo.glassmic.root
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.system.ErrnoException
@@ -13,10 +17,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.R
 import io.mo.glassmic.audio.SharedPcmPublisher
 import io.mo.glassmic.core.model.SourceType
+import androidx.core.content.ContextCompat
 import io.mo.glassmic.data.config.ConfigStore
+import io.mo.glassmic.data.config.audioPolicyTargets
 import io.mo.glassmic.data.runtime.EffectiveSourceResolver
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.log.GlassLog
+import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.InjectionBackend
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,8 +76,26 @@ class AudioPolicyController @Inject constructor(
         @Volatile var error: String? = null
     }
 
+    /** Resolved target set. [skipped] counts selected packages that cannot be routed by UID. */
+    private data class Targets(val uids: List<Int>, val skipped: Int)
+
+    // Bumped on install/uninstall/update so UID lists (especially all-apps mode) are recomputed.
+    private val packagesVersion = AtomicLong()
+    private val packageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) { packagesVersion.incrementAndGet() }
+    }
+
     fun start() {
         if (watcher?.isActive == true) return
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            }
+            ContextCompat.registerReceiver(context, packageReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        }
         watcher = scope.launch {
             lifecycleMutex.withLock {
                 try { observe() }
@@ -83,7 +108,11 @@ class AudioPolicyController @Inject constructor(
         }
     }
 
-    fun stop() { watcher?.cancel(); watcher = null }
+    fun stop() {
+        watcher?.cancel()
+        watcher = null
+        runCatching { context.unregisterReceiver(packageReceiver) }
+    }
     fun retry() { retryVersion.incrementAndGet() }
 
     fun diagnostics(): JSONObject = JSONObject().apply {
@@ -94,50 +123,70 @@ class AudioPolicyController @Inject constructor(
         put("format", "PCM16")
     }
 
+    /** Identifies the user's selection; independent of installed-package changes. */
+    private fun targetConfigKey(cfg: AppConfig): String =
+        if (cfg.audioPolicyAllApps) ALL_APPS else cfg.audioPolicyTargets().sorted().joinToString(",")
+
+    /** Every target shares one PCM stream and the same gates, so one package stands in for the selection. */
+    private fun injecting(cfg: AppConfig): Boolean {
+        val probe = if (cfg.audioPolicyAllApps) ALL_APPS else cfg.audioPolicyTargets().minOrNull() ?: return false
+        return resolver.resolve(probe, forAudioPolicy = true) != SourceType.REAL_MIC
+    }
+
+    private fun stillRequested(cfg: AppConfig, configKey: String): Boolean =
+        runtime.value.enabled && cfg.globalSwitch && cfg.injectionBackend == InjectionBackend.AUDIO_POLICY &&
+            targetConfigKey(cfg) == configKey && injecting(cfg)
+
     private suspend fun observe() {
         var activeTarget: String? = null
+        var activeUids: List<Int>? = null
         var failedRequest: String? = null
         while (currentCoroutineContext().isActive) {
             val cfg = config.current()
             val enabled = cfg.injectionBackend == InjectionBackend.AUDIO_POLICY &&
                 cfg.globalSwitch && runtime.value.enabled
-            val pkg = cfg.audioPolicyPackage
-            val request = "${cfg.injectionBackend}:$pkg:${retryVersion.get()}"
+            val configKey = targetConfigKey(cfg)
+            val target = "$configKey#${packagesVersion.get()}"
+            val request = "${cfg.injectionBackend}:$target:${retryVersion.get()}"
             if (!enabled) {
                 closeSession()
                 activeTarget = null
+                activeUids = null
                 failedRequest = null
                 publish(PolicyPhase.IDLE)
-            } else if (pkg.isBlank()) {
+            } else if (configKey.isEmpty()) {
                 closeSession()
                 activeTarget = null
+                activeUids = null
                 publish(PolicyPhase.ERROR, context.getString(R.string.backend_scope_error))
-            } else if (resolver.resolve(pkg, forAudioPolicy = true) == SourceType.REAL_MIC) {
+            } else if (!injecting(cfg)) {
                 closeSession()
                 activeTarget = null
+                activeUids = null
                 if (failedRequest != request) publish(PolicyPhase.IDLE)
             } else if (failedRequest != request) {
                 try {
-                    if (activeTarget != pkg || session == null) {
-                        closeSession()
-                        val uid = validateTarget(pkg)
-                        publish(PolicyPhase.STARTING)
-                        // XBridge caches for 200 ms; native polls every 250 ms. Let old FILE decisions expire.
-                        delay(750)
-                        openSession(uid, pkg)
-                        // Startup/root authorization may take seconds. Recheck before feeding PCM.
-                        val latest = config.current()
-                        if (!runtime.value.enabled || !latest.globalSwitch ||
-                            latest.injectionBackend != InjectionBackend.AUDIO_POLICY ||
-                            latest.audioPolicyPackage != pkg ||
-                            resolver.resolve(pkg, forAudioPolicy = true) == SourceType.REAL_MIC) {
+                    if (activeTarget != target || session == null) {
+                        val targets = resolveTargets(cfg)
+                        // A package change that leaves the UID set intact must not interrupt audio.
+                        if (session == null || targets.uids != activeUids) {
                             closeSession()
-                            activeTarget = null
-                            continue
+                            activeUids = null
+                            publish(PolicyPhase.STARTING)
+                            // XBridge caches for 200 ms; native polls every 250 ms. Let old FILE decisions expire.
+                            delay(750)
+                            openSession(targets.uids)
+                            // Startup/root authorization may take seconds. Recheck before feeding PCM.
+                            if (!stillRequested(config.current(), configKey)) {
+                                closeSession()
+                                activeTarget = null
+                                continue
+                            }
+                            attachPcm(CONSUMER_NAME)
+                            activeUids = targets.uids
                         }
-                        attachPcm(pkg)
-                        activeTarget = pkg
-                        publish(PolicyPhase.ACTIVE)
+                        activeTarget = target
+                        publish(PolicyPhase.ACTIVE, activeDetail(targets))
                     }
                     session?.let {
                         it.error?.let { message -> throw IOException(message) }
@@ -148,11 +197,8 @@ class AudioPolicyController @Inject constructor(
                 } catch (error: Exception) {
                     closeSession()
                     activeTarget = null
-                    val latest = config.current()
-                    val stillRequested = runtime.value.enabled && latest.globalSwitch &&
-                        latest.injectionBackend == InjectionBackend.AUDIO_POLICY && latest.audioPolicyPackage == pkg &&
-                        resolver.resolve(pkg, forAudioPolicy = true) != SourceType.REAL_MIC
-                    if (stillRequested) {
+                    activeUids = null
+                    if (stillRequested(config.current(), configKey)) {
                         failedRequest = request
                         publish(PolicyPhase.ERROR, error.message ?: error.javaClass.simpleName)
                     } else {
@@ -166,32 +212,69 @@ class AudioPolicyController @Inject constructor(
         }
     }
 
+    private fun activeDetail(targets: Targets): String {
+        val count = context.getString(R.string.backend_targets_active, targets.uids.size)
+        return if (targets.skipped == 0) count
+            else count + context.getString(R.string.backend_targets_skipped, targets.skipped)
+    }
+
+    /**
+     * Maps the selection to app UIDs. System apps, the launcher, input methods and GlassMic are never
+     * targeted. UID routing cannot distinguish packages sharing one UID, so a shared UID is only used
+     * when every package on it is itself a target.
+     */
     @Suppress("DEPRECATION")
-    private fun validateTarget(pkg: String): Int {
+    private fun resolveTargets(cfg: AppConfig): Targets {
         val pm = context.packageManager
-        val app = pm.getApplicationInfo(pkg, 0)
         val home = pm.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
             ?.activityInfo?.packageName
         val inputMethods = pm.queryIntentServices(Intent("android.view.InputMethod"), 0)
-        require(app.uid % 100000 >= 10000 && app.uid != android.os.Process.myUid() &&
+            .mapTo(HashSet()) { it.serviceInfo.packageName }
+        fun eligible(app: ApplicationInfo) = app.uid % 100000 >= 10000 &&
+            app.uid != android.os.Process.myUid() &&
             app.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0 &&
-            pkg != home && inputMethods.none { it.serviceInfo.packageName == pkg }) {
-            context.getString(R.string.backend_target_error)
+            app.packageName != home && app.packageName !in inputMethods
+
+        if (cfg.audioPolicyAllApps) {
+            // Apps that never request RECORD_AUDIO cannot record; leaving them out keeps the rule list short.
+            val candidates = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS).filter { info ->
+                val app = info.applicationInfo ?: return@filter false
+                info.requestedPermissions?.contains(Manifest.permission.RECORD_AUDIO) == true && eligible(app)
+            }
+            val uids = candidates.mapNotNull { it.applicationInfo?.uid }.distinct().filter { uid ->
+                pm.getPackagesForUid(uid).orEmpty().all { pkg ->
+                    runCatching { eligible(pm.getApplicationInfo(pkg, 0)) }.getOrDefault(false)
+                }
+            }.sorted()
+            require(uids.isNotEmpty()) { context.getString(R.string.backend_no_eligible_apps) }
+            return Targets(uids, skipped = 0)
         }
-        // UID routing cannot distinguish packages sharing one UID: refuse to widen the selected scope.
-        require(pm.getPackagesForUid(app.uid)?.toSet() == setOf(pkg)) {
-            context.getString(R.string.backend_shared_uid_error)
+
+        val selected = cfg.audioPolicyTargets()
+        val uids = sortedSetOf<Int>()
+        var skipped = 0
+        var lastError: String? = null
+        for (pkg in selected.sorted()) {
+            val app = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
+            lastError = when {
+                app == null || !eligible(app) -> context.getString(R.string.backend_target_error)
+                !pm.getPackagesForUid(app.uid).orEmpty().all { it in selected } ->
+                    context.getString(R.string.backend_shared_uid_error)
+                else -> { uids += app.uid; continue }
+            }
+            skipped++
         }
-        return app.uid
+        require(uids.isNotEmpty()) { lastError ?: context.getString(R.string.backend_scope_error) }
+        return Targets(uids.toList(), skipped)
     }
 
-    private suspend fun openSession(uid: Int, pkg: String) {
+    private suspend fun openSession(uids: List<Int>) {
         val dir = File(context.filesDir, "audio-policy").apply { mkdirs() }
         // A private, unpredictable FIFO for each run; no world-writable pipe or shared /data/local/tmp APK.
         val fifo = File(dir, "pcm-${UUID.randomUUID()}")
         Os.mkfifo(fifo.absolutePath, 0x180 /* 0600 */)
         val command = "CLASSPATH=${quote(context.applicationInfo.sourceDir)} exec /system/bin/app_process " +
-            "/system/bin io.mo.glassmic.root.AudioPolicyMain $uid ${quote(fifo.absolutePath)}"
+            "/system/bin io.mo.glassmic.root.AudioPolicyMain ${uids.joinToString(",")} ${quote(fifo.absolutePath)}"
         val process = try {
             ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
         } catch (error: Exception) {
@@ -203,10 +286,10 @@ class AudioPolicyController @Inject constructor(
         current.heartbeat = scope.launch {
             try {
                 while (isActive && process.isAlive) {
+                    // Target changes are handled by observe(); here only stop for gates that end injection.
                     val latest = config.current()
                     if (!runtime.value.enabled || !latest.globalSwitch ||
-                        latest.injectionBackend != InjectionBackend.AUDIO_POLICY || latest.audioPolicyPackage != pkg ||
-                        resolver.resolve(pkg, forAudioPolicy = true) == SourceType.REAL_MIC) {
+                        latest.injectionBackend != InjectionBackend.AUDIO_POLICY || !injecting(latest)) {
                         process.outputStream.close()
                         current.ready.completeExceptionally(IOException("Injection request changed during startup"))
                         break
@@ -308,4 +391,10 @@ class AudioPolicyController @Inject constructor(
     }
 
     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
+
+    private companion object {
+        /** Selection key and resolver probe for all-apps mode; never a valid package name. */
+        const val ALL_APPS = "*"
+        const val CONSUMER_NAME = "audiopolicy"
+    }
 }

@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.data.config.ConfigStore
+import io.mo.glassmic.data.config.audioPolicyTargets
 import io.mo.glassmic.data.runtime.LsposedServiceManager
 import io.mo.glassmic.data.runtime.ScopeRequestResult
 import io.mo.glassmic.proto.ScopeMode
@@ -44,6 +45,7 @@ sealed interface ScopeEvent {
 
 data class ScopeUiState(
     val audioPolicyBackend: Boolean = false,
+    val audioPolicyAllApps: Boolean = false,
     val whitelist: Set<String> = emptySet(),
     val isLsposedServiceBound: Boolean = false,
     val showSystemApps: Boolean = false,
@@ -92,8 +94,9 @@ class ScopeViewModel @Inject constructor(
     ) { cfg, isBound, query, loading, apps ->
         ScopeUiState(
             audioPolicyBackend = cfg.injectionBackend == InjectionBackend.AUDIO_POLICY,
+            audioPolicyAllApps = cfg.audioPolicyAllApps,
             whitelist = if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY)
-                setOf(cfg.audioPolicyPackage).filter { it.isNotBlank() }.toSet() else cfg.whitelistList.toSet(),
+                cfg.audioPolicyTargets() else cfg.whitelistList.toSet(),
             isLsposedServiceBound = isBound,
             showSystemApps = cfg.showSystemApps,
             query = query,
@@ -159,7 +162,11 @@ class ScopeViewModel @Inject constructor(
         viewModelScope.launch {
             if (configStore.current().injectionBackend == InjectionBackend.AUDIO_POLICY) {
                 configStore.update {
-                    it.setAudioPolicyPackage(if (it.audioPolicyPackage == pkg) "" else pkg)
+                    val targets = it.build().audioPolicyTargets().toMutableSet()
+                    if (!targets.remove(pkg)) targets.add(pkg)
+                    // Migrates the legacy single-target field into the list on the first edit.
+                    it.setAudioPolicyPackage("").clearAudioPolicyPackages()
+                        .addAllAudioPolicyPackages(targets.sorted())
                 }
                 return@launch
             }
@@ -214,6 +221,10 @@ class ScopeViewModel @Inject constructor(
                 _events.emit(ScopeEvent.Removed(appLabel))
             }
         }
+    }
+
+    fun setAudioPolicyAllApps(enabled: Boolean) {
+        viewModelScope.launch { configStore.update { it.setAudioPolicyAllApps(enabled) } }
     }
 
     fun setShowSystemApps(show: Boolean) {

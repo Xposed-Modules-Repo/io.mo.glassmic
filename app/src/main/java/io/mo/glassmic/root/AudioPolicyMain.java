@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Standalone app_process entry point. Uses only framework/Java classes, never the Application/Hilt.
  * The parent owns stdin: EOF or a missing heartbeat terminates this process and its Binder policy.
+ * Arguments: comma-separated target app UIDs, FIFO path. All UIDs share one injection mix.
  * PCM FIFO protocol: big-endian int64 discontinuity epoch, int32 length, PCM16 LE mono 48 kHz.
  */
 public final class AudioPolicyMain {
@@ -31,7 +32,7 @@ public final class AudioPolicyMain {
 
     public static void main(String[] args) {
         if (Process.myUid() != 0 || args.length != 2) {
-            System.out.println("ERROR Root access and a target UID are required");
+            System.out.println("ERROR Root access and target UIDs are required");
             System.exit(1);
         }
         // Start BEFORE registration: a parent disappearing during startup must also be handled.
@@ -53,8 +54,7 @@ public final class AudioPolicyMain {
         }, "glassmic-lease").start();
         Runtime.getRuntime().addShutdownHook(new Thread(AudioPolicyMain::cleanup));
         try {
-            int uid = Integer.parseInt(args[0]);
-            if (uid < 10000) throw new IllegalArgumentException("System UIDs are not supported");
+            int[] uids = parseUids(args[0]);
             Looper.prepareMainLooper();
             // Hidden framework APIs are used only in this explicitly root-launched process.
             Class<?> vm = Class.forName("dalvik.system.VMRuntime");
@@ -64,7 +64,7 @@ public final class AudioPolicyMain {
             Class<?> activityThread = Class.forName("android.app.ActivityThread");
             Object thread = activityThread.getMethod("systemMain").invoke(null);
             context = (Context) activityThread.getMethod("getSystemContext").invoke(thread);
-            register(uid);
+            register(uids);
             new Thread(() -> {
                 try {
                     pump(args[1]);
@@ -81,7 +81,18 @@ public final class AudioPolicyMain {
         }
     }
 
-    private static void register(int uid) throws Exception {
+    private static int[] parseUids(String arg) {
+        String[] parts = arg.split(",");
+        int[] uids = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            uids[i] = Integer.parseInt(parts[i].trim());
+            if (uids[i] % 100000 < 10000) throw new IllegalArgumentException("System UIDs are not supported");
+        }
+        if (uids.length == 0) throw new IllegalArgumentException("No target UID");
+        return uids;
+    }
+
+    private static void register(int[] uids) throws Exception {
         Class<?> ruleClass = Class.forName("android.media.audiopolicy.AudioMixingRule");
         Class<?> ruleBuilderClass = Class.forName("android.media.audiopolicy.AudioMixingRule$Builder");
         Class<?> mixClass = Class.forName("android.media.audiopolicy.AudioMix");
@@ -96,8 +107,10 @@ public final class AudioPolicyMain {
             ruleBuilderClass.getMethod("setTargetMixType", int.class).invoke(ruleBuilder,
                     constant(mixClass, "MIX_TYPE_RECORDERS"));
         }
-        ruleBuilderClass.getMethod("addMixRule", int.class, Object.class).invoke(ruleBuilder,
-                constant(ruleClass, "RULE_MATCH_UID"), uid);
+        // Criteria of the same type are OR-ed: the mix captures a recorder whose UID matches any target.
+        Method addMixRule = ruleBuilderClass.getMethod("addMixRule", int.class, Object.class);
+        int matchUid = constant(ruleClass, "RULE_MATCH_UID");
+        for (int uid : uids) addMixRule.invoke(ruleBuilder, matchUid, uid);
         Object rule = ruleBuilderClass.getMethod("build").invoke(ruleBuilder);
         Object mixBuilder = mixBuilderClass.getConstructor(ruleClass).newInstance(rule);
         AudioFormat format = new AudioFormat.Builder().setSampleRate(48000)

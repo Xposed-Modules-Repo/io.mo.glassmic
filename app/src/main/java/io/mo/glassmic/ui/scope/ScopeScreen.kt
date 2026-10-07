@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -51,6 +50,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -137,6 +137,7 @@ fun ScopeScreen(
                 Text(stringResource(R.string.backend_scope_hint),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall)
+                AllAppsRow(checked = state.audioPolicyAllApps, onChange = vm::setAudioPolicyAllApps)
             } else LsposedServiceStatusCard(isBound = state.isLsposedServiceBound)
 
             // App 选择器（搜索、系统应用开关、应用列表）
@@ -147,6 +148,33 @@ fun ScopeScreen(
                 onToggleApp = vm::toggleApp
             )
         }
+    }
+}
+
+/** AudioPolicy 全局模式开关：开启后由后端自动枚举目标，列表勾选暂不生效。 */
+@Composable
+private fun AllAppsRow(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.scope_audio_policy_all_apps),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                stringResource(R.string.scope_audio_policy_all_apps_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
@@ -225,7 +253,8 @@ private fun AppPicker(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            stringResource(R.string.scope_selected_count, state.whitelist.size),
+            if (state.audioPolicyBackend && state.audioPolicyAllApps) stringResource(R.string.scope_all_apps_selected)
+            else stringResource(R.string.scope_selected_count, state.whitelist.size),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             modifier = Modifier.weight(1f)
@@ -274,7 +303,7 @@ private fun AppPicker(
             AppRow(
                 app = app,
                 checked = app.packageName in state.whitelist,
-                singleSelection = state.audioPolicyBackend,
+                enabled = !(state.audioPolicyBackend && state.audioPolicyAllApps),
                 onToggle = { onToggleApp(app.packageName) }
             )
         }
@@ -354,18 +383,18 @@ private val APP_ICON_SIZE = 40.dp
 private fun AppRow(
     app: AppItem,
     checked: Boolean,
-    singleSelection: Boolean,
+    enabled: Boolean,
     onToggle: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .clickable(enabled = enabled, onClick = onToggle)
+            .alpha(if (enabled) 1f else 0.4f)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (singleSelection) RadioButton(selected = checked, onClick = onToggle)
-        else Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
         Spacer(modifier = Modifier.width(8.dp))
         AppIcon(packageName = app.packageName)
         Spacer(modifier = Modifier.width(12.dp))

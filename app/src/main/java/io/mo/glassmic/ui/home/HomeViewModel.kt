@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.R
+import io.mo.glassmic.data.config.audioPolicyTargets
 import io.mo.glassmic.core.model.SourceType
 import io.mo.glassmic.data.audio.PlaybackController
 import io.mo.glassmic.data.config.AppLocale
@@ -101,7 +102,13 @@ class HomeViewModel @Inject constructor(
                 else -> AppLocale.string(context, R.string.library_policy_loop)
             },
             scopeLabel = if (cfg.injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY) {
-                cfg.audioPolicyPackage.ifBlank { AppLocale.string(context, R.string.scope_none_selected) }
+                val targets = cfg.audioPolicyTargets()
+                when {
+                    cfg.audioPolicyAllApps -> AppLocale.string(context, R.string.scope_all_apps_selected)
+                    targets.isEmpty() -> AppLocale.string(context, R.string.scope_none_selected)
+                    targets.size == 1 -> targets.first()
+                    else -> AppLocale.string(context, R.string.home_scope_whitelist_count, targets.size)
+                }
             } else if (cfg.whitelistCount > 0) {
                 AppLocale.string(context, R.string.home_scope_whitelist_count, cfg.whitelistCount)
             } else {

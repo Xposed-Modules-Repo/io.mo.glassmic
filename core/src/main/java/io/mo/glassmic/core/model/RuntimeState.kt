@@ -29,5 +29,6 @@ data class ConfigSnapshot(
     val blacklist: Set<String>,
     val onboardingCompleted: Boolean,
     val audioPolicyBackend: Boolean = false,
-    val audioPolicyPackage: String = ""
+    val audioPolicyPackages: Set<String> = emptySet(),
+    val audioPolicyAllApps: Boolean = false
 )

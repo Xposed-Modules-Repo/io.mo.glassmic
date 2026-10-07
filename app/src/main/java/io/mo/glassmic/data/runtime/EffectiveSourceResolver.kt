@@ -75,7 +75,8 @@ class EffectiveSourceResolver @Inject constructor(
             return Triple(SourceType.REAL_MIC, "SELF_PACKAGE", "跳过本模块自身进程 (Self package skip)")
         }
         // 6. 生效范围
-        val inScope = if (forAudioPolicy) callerPackage.isNotBlank() && callerPackage == snap.audioPolicyPackage
+        val inScope = if (forAudioPolicy) callerPackage.isNotBlank() &&
+                (snap.audioPolicyAllApps || callerPackage in snap.audioPolicyPackages)
             else ScopeMatcher.matches(callerPackage, snap)
         if (!inScope) {
             return Triple(SourceType.REAL_MIC, "SCOPE_FILTERED", "未命中生效范围/白名单 (Scope filtered)")

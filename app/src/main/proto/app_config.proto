@@ -47,7 +47,12 @@ message AppConfig {
   // Opt-in backend. Zero preserves existing LSPosed installations.
   InjectionBackend injection_backend = 20;
   // Independent selection, so LSPosed scope sync cannot overwrite the root target.
+  // Legacy single target; read as part of audio_policy_packages and cleared on the next edit.
   string audio_policy_package = 21;
+  // AudioPolicy targets (one UID rule each, OR-ed inside a single injection mix).
+  repeated string audio_policy_packages = 22;
+  // Target every eligible third-party app that requests RECORD_AUDIO; ignores audio_policy_packages.
+  bool audio_policy_all_apps = 23;
 }
 
 enum InjectionBackend {
