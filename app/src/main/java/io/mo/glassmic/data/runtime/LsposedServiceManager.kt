@@ -112,6 +112,22 @@ class LsposedServiceManager @Inject constructor(
         return scopeList
     }
 
+    /**
+     * 从 LSPosed 框架作用域中移除应用。仅改本地白名单不够：框架作用域会在下一次同步时把它写回来。
+     * @return 服务未连接或调用失败时返回 false
+     */
+    fun removeScope(packageName: String): Boolean {
+        val service = xposedService ?: return false
+        return runCatching {
+            service.removeScope(listOf(packageName))
+            syncScope()
+            true
+        }.getOrElse {
+            Log.w(tag, "removeScope failed: ${it.message}")
+            false
+        }
+    }
+
     fun requestScope(
         packageName: String,
         onResult: (ScopeRequestResult) -> Unit

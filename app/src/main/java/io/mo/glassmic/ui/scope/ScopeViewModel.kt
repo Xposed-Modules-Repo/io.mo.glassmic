@@ -38,6 +38,7 @@ sealed interface ScopeEvent {
     data class Denied(val label: String) : ScopeEvent
     data class Unsupported(val label: String) : ScopeEvent
     data class Removed(val label: String) : ScopeEvent
+    data class RemoveFailed(val label: String) : ScopeEvent
     data class Synced(val count: Int) : ScopeEvent
 }
 
@@ -199,6 +200,11 @@ class ScopeViewModel @Inject constructor(
                     }
                 }
             } else {
+                // 先从框架作用域移除；失败则保留勾选，否则下次同步会把它写回来
+                if (!lsposedServiceManager.removeScope(pkg)) {
+                    _events.emit(ScopeEvent.RemoveFailed(appLabel))
+                    return@launch
+                }
                 // 从生效列表移除
                 configStore.update {
                     val current = it.whitelistList.toMutableSet()

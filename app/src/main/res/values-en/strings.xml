@@ -110,6 +110,7 @@
     <string name="scope_event_denied">%1$s scope request canceled/denied</string>
     <string name="scope_event_unsupported">Added %1$s to target list. Please confirm scope in LSPosed Manager and restart</string>
     <string name="scope_event_removed">Removed %1$s from target list</string>
+    <string name="scope_event_remove_failed">Could not remove %1$s from LSPosed scope. Please uncheck it in LSPosed Manager</string>
     <string name="scope_event_synced">Synced %1$d apps from LSPosed Manager</string>
     <string name="scope_sync_tooltip">Sync scope from LSPosed Manager</string>
     <string name="scope_open_lsposed">Open LSPosed Manager</string>

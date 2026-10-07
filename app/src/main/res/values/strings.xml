@@ -110,6 +110,7 @@
     <string name="scope_event_denied">「%1$s」作用域授权已取消/拒绝</string>
     <string name="scope_event_unsupported">已添加「%1$s」，请在 LSPosed 管理器中确认作用域并重启应用</string>
     <string name="scope_event_removed">已移除「%1$s」</string>
+    <string name="scope_event_remove_failed">无法从 LSPosed 作用域移除「%1$s」，请在 LSPosed 管理器中手动取消勾选</string>
     <string name="scope_event_synced">已从 LSPosed 管理器同步 %1$d 个应用作用域</string>
     <string name="scope_sync_tooltip">从 LSPosed 管理器同步作用域</string>
     <string name="scope_open_lsposed">打开 LSPosed 管理器</string>

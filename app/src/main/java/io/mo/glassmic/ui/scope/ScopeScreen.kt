@@ -2,7 +2,9 @@ package io.mo.glassmic.ui.scope
 
 import android.content.Context
 import android.content.Intent
+import android.util.LruCache
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,19 +47,29 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.mo.glassmic.R
+import io.mo.glassmic.memory.MemoryPressure
+import io.mo.glassmic.memory.MemoryPressureBus
+import io.mo.glassmic.memory.MemoryReleasable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,6 +103,7 @@ fun ScopeScreen(
                 is ScopeEvent.Denied -> context.getString(R.string.scope_event_denied, event.label)
                 is ScopeEvent.Unsupported -> context.getString(R.string.scope_event_unsupported, event.label)
                 is ScopeEvent.Removed -> context.getString(R.string.scope_event_removed, event.label)
+                is ScopeEvent.RemoveFailed -> context.getString(R.string.scope_event_remove_failed, event.label)
                 is ScopeEvent.Synced -> context.getString(R.string.scope_event_synced, event.count)
             }
             snackbar.showSnackbar(msg)
@@ -287,6 +301,55 @@ private fun openLSPosedManager(ctx: Context): Boolean {
     return runCatching { ctx.startActivity(action); true }.getOrDefault(false)
 }
 
+/** 已解码的应用图标。按需加载、容量有限；纯界面缓存，任何内存压力下都整体丢弃。 */
+private object AppIconCache : MemoryReleasable {
+    private val cache = LruCache<String, ImageBitmap>(128)
+
+    init {
+        MemoryPressureBus.register(this)
+    }
+
+    fun get(pkg: String): ImageBitmap? = cache.get(pkg)
+
+    fun put(pkg: String, icon: ImageBitmap) {
+        cache.put(pkg, icon)
+    }
+
+    override fun onMemoryPressure(level: MemoryPressure): Long {
+        val freed = cache.snapshot().values.sumOf { it.width.toLong() * it.height * 4 }
+        cache.evictAll()
+        return freed
+    }
+}
+
+@Composable
+private fun AppIcon(packageName: String) {
+    val context = LocalContext.current
+    val sizePx = with(LocalDensity.current) { APP_ICON_SIZE.roundToPx() }
+    val icon by produceState(AppIconCache.get(packageName), packageName) {
+        if (value != null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.packageManager.getApplicationIcon(packageName)
+                    .toBitmap(sizePx, sizePx)
+                    .asImageBitmap()
+            }.getOrNull()
+        }?.also { AppIconCache.put(packageName, it) }
+    }
+    val bitmap = icon
+    if (bitmap != null) {
+        Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.size(APP_ICON_SIZE))
+    } else {
+        Box(
+            modifier = Modifier
+                .size(APP_ICON_SIZE)
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+        )
+    }
+}
+
+private val APP_ICON_SIZE = 40.dp
+
 @Composable
 private fun AppRow(
     app: AppItem,
@@ -304,6 +367,8 @@ private fun AppRow(
         if (singleSelection) RadioButton(selected = checked, onClick = onToggle)
         else Checkbox(checked = checked, onCheckedChange = { onToggle() })
         Spacer(modifier = Modifier.width(8.dp))
+        AppIcon(packageName = app.packageName)
+        Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 app.label,
