@@ -94,18 +94,32 @@ fun GlassMicTheme(content: @Composable () -> Unit) {
     val vm: ThemeViewModel = hiltViewModel()
     val state by vm.state.collectAsState()
 
-    val isDark = when (state.theme) {
+    GlassThemeContent(state.theme, state.glassEffect, state.reduceMotion, content)
+}
+
+/**
+ * 不依赖 ViewModel 的主题外壳：主 App 与悬浮窗（Service 内的 ComposeView）共用，
+ * 保证悬浮窗跟随同一套深浅色与液态玻璃设置。
+ */
+@Composable
+fun GlassThemeContent(
+    theme: ThemeMode,
+    glassEffect: Boolean,
+    reduceMotion: Boolean,
+    content: @Composable () -> Unit
+) {
+    val isDark = when (theme) {
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
         else -> isSystemInDarkTheme()
     }
-    val tokens = remember(isDark, state.glassEffect) { glassTokens(isDark, state.glassEffect) }
+    val tokens = remember(isDark, glassEffect) { glassTokens(isDark, glassEffect) }
     val scheme = remember(isDark, tokens) { tokens.toColorScheme(if (isDark) GlassDarkScheme else GlassLightScheme) }
 
     MaterialTheme(colorScheme = scheme, typography = GlassTypography) {
         CompositionLocalProvider(
-            LocalGlassEnabled provides state.glassEffect,
-            LocalReduceMotion provides state.reduceMotion,
+            LocalGlassEnabled provides glassEffect,
+            LocalReduceMotion provides reduceMotion,
             LocalGlassTokens provides tokens
         ) { content() }
     }

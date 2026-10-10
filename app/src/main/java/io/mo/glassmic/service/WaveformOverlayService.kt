@@ -8,8 +8,6 @@ import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -22,7 +20,7 @@ import io.mo.glassmic.audio.SharedPcmPublisher
 import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.proto.AppConfig
-import io.mo.glassmic.ui.theme.LocalGlassEnabled
+import io.mo.glassmic.ui.theme.GlassThemeContent
 import javax.inject.Inject
 
 /**
@@ -97,8 +95,11 @@ class WaveformOverlayService : LifecycleService() {
         val overlayHost = FloatingOverlayHost(this).also { it.onCreate() }
         host = overlayHost
         overlayHost.setContent {
-            MaterialTheme(colorScheme = OverlayColorScheme) {
-                val cfg by configStore.flow.collectAsState(initial = AppConfig.getDefaultInstance())
+            val cfgState = configStore.flow.collectAsState(initial = AppConfig.getDefaultInstance())
+            val appearance = cfgState.value.appearance
+            // 与主悬浮窗共用主题外壳，跟随 App 的深浅色与液态玻璃设置
+            GlassThemeContent(appearance.theme, appearance.glassEffect, appearance.reduceMotion) {
+                val cfg by cfgState
                 val opacity = cfg.floatingWindow.waveformOpacity.takeIf { it > 0f } ?: 0.6f
                 var samples by remember { mutableStateOf(FloatArray(WAVE_POINTS)) }
                 LaunchedEffect(Unit) {
@@ -115,15 +116,12 @@ class WaveformOverlayService : LifecycleService() {
                         samples = ring.copyOf()  // 新数组引用触发重绘
                     }
                 }
-                // 悬浮窗不走 GlassMicTheme，玻璃效果开关得在这里手动注入
-                CompositionLocalProvider(LocalGlassEnabled provides cfg.appearance.glassEffect) {
-                    WaveformOverlay(
-                        samples = samples,
-                        opacity = opacity,
-                        onDragBy = ::onDragBy,
-                        onDragEnd = ::onDragEnd,
-                    )
-                }
+                WaveformOverlay(
+                    samples = samples,
+                    opacity = opacity,
+                    onDragBy = ::onDragBy,
+                    onDragEnd = ::onDragEnd,
+                )
             }
         }
         runCatching { wm.addView(overlayHost.view, lp) }

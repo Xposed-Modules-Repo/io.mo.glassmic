@@ -14,8 +14,6 @@ import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowInsets
 import android.view.WindowManager
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalDensity
@@ -38,8 +36,7 @@ import io.mo.glassmic.data.runtime.VolumeShortcutRepository
 import io.mo.glassmic.log.GlassLog
 import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.FloatingSize
-import io.mo.glassmic.ui.theme.LocalGlassEnabled
-import io.mo.glassmic.ui.theme.LocalReduceMotion
+import io.mo.glassmic.ui.theme.GlassThemeContent
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -235,11 +232,12 @@ class FloatingWindowService : LifecycleService() {
             }
         }
         overlayHost.setContent {
-            // 悬浮窗以前只包了裸 MaterialTheme{}，Slider/Switch 会用 Material3 默认紫色，
-            // 和面板里的绿色 Accent 打架。挂上 OverlayColorScheme 后它们自动跟随主色。
-            MaterialTheme(colorScheme = OverlayColorScheme) {
+            val cfgState = configStore.flow.collectAsState(initial = AppConfig.getDefaultInstance())
+            val appearance = cfgState.value.appearance
+            // 悬浮窗不走 GlassMicTheme（需要 ViewModel），直接用同一套主题外壳：跟随 App 的深浅色与液态玻璃设置
+            GlassThemeContent(appearance.theme, appearance.glassEffect, appearance.reduceMotion) {
                 val rt by runtime.flow.collectAsState()
-                val cfg by configStore.flow.collectAsState(initial = AppConfig.getDefaultInstance())
+                val cfg by cfgState
                 val groups by audioDao.observeGroups().collectAsState(initial = emptyList())
                 val allClips by audioDao.observeAllClips().collectAsState(initial = emptyList())
                 val mode by modeFlow.collectAsState()
@@ -254,11 +252,6 @@ class FloatingWindowService : LifecycleService() {
                 val currentName = if (rt.currentSourceType == SourceType.TTS) stringResource(R.string.source_tts)
                                   else allClips.firstOrNull { it.id == currentId }?.displayName
 
-                // 悬浮窗不走 GlassMicTheme，这两个外观开关得在这里手动注入
-                CompositionLocalProvider(
-                    LocalGlassEnabled provides cfg.appearance.glassEffect,
-                    LocalReduceMotion provides cfg.appearance.reduceMotion,
-                ) {
                 FloatingBubbleRoot(
                     playbackPolicy = cfg.playbackPolicy,
                     onSetPlaybackPolicy = { policy ->
@@ -275,6 +268,7 @@ class FloatingWindowService : LifecycleService() {
                     positionMs = rt.positionMs,
                     durationMs = rt.durationMs,
                     currentName = currentName,
+                    currentGroupId = cfg.currentGroupId.takeIf { it.isNotBlank() },
                     sizeDp = sizeToDp(cfg.floatingWindow.size),
                     iconPath = cfg.floatingWindow.customIconPath.takeIf { it.isNotBlank() }
                         ?.let { iconStore.iconFile(it).absolutePath },
@@ -282,10 +276,10 @@ class FloatingWindowService : LifecycleService() {
                     groups = groups.map { FloatGroupItem(it.id, it.emoji, it.name) },
                     clipsProvider = { gid ->
                         audioDao.observeClipsInGroup(gid).map { list ->
-                            list.map { FloatClipItem(it.id, it.displayName, it.id == currentId) }
+                            list.map { FloatClipItem(it.id, it.displayName, it.id == currentId, it.durationMs) }
                         }
                     },
-                    onBallTap = { onBallTap(activeFile) },
+                    onBallTap = { onBallTap(rt.currentSourceType == SourceType.TTS) },
                     onTogglePause = { playback.togglePause() },
                     onSeek = { frac -> onSeek(frac, rt.durationMs) },
                     onOpenMenu = { setMode(FloatMode.MENU) },
@@ -312,7 +306,6 @@ class FloatingWindowService : LifecycleService() {
                     onDragBy = { dx, dy -> onDragBy(dx, dy) },
                     onDragEnd = { onDragEnd() },
                 )
-                }
             }
         }
         runCatching { wm.addView(overlayHost.view, lp) }
@@ -320,8 +313,9 @@ class FloatingWindowService : LifecycleService() {
     }
 
     // ============ 手势 / 交互回调 ============
-    private fun onBallTap(activeFile: Boolean) {
-        setMode(if (activeFile) FloatMode.MINI_BAR else FloatMode.MENU)
+    /** 轻点悬浮球直接展开面板；当前音源是文字转语音时停在 TTS 页。 */
+    private fun onBallTap(ttsSource: Boolean) {
+        setMode(if (ttsSource) FloatMode.TTS else FloatMode.MENU)
     }
 
     private fun toggleAudioMonitor() {
@@ -342,8 +336,8 @@ class FloatingWindowService : LifecycleService() {
     private fun onSelectClip(clipId: String) {
         lifecycleScope.launch {
             val ok = playback.setCurrentClip(clipId)
-            if (ok) setMode(FloatMode.MINI_BAR)
-            else GlassLog.b("Float") { "选中片段失败: $clipId" }
+            // 选中后停留在音频库面板，当前项高亮即为反馈
+            if (!ok) GlassLog.b("Float") { "选中片段失败: $clipId" }
         }
     }
 
