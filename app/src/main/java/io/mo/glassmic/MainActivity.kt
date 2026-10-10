@@ -40,6 +40,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.currentBackStackEntryAsState
 import io.mo.glassmic.ui.common.glass
+import io.mo.glassmic.ui.common.SplashOverlay
+import io.mo.glassmic.ui.theme.LocalReduceMotion
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -94,7 +99,13 @@ class MainActivity : ComponentActivity() {
                 val vm: GateViewModel = hiltViewModel()
                 val gate by vm.gate.collectAsState()
                 val nav = rememberNavController()
-                AppNavHost(nav, gate)
+                // 开屏动画只在冷启动播放；系统“降低动画”时跳过
+                val reduceMotion = LocalReduceMotion.current
+                var showSplash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
+                Box(Modifier.fillMaxSize()) {
+                    AppNavHost(nav, gate)
+                    if (showSplash && !reduceMotion) SplashOverlay(onFinished = { showSplash = false })
+                }
             }
         }
     }
