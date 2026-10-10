@@ -459,4 +459,21 @@
     <string name="float_tts_preview">Preview</string>
     <string name="float_tts_preview_stop">Stop</string>
     <string name="waveform_title">Live waveform</string>
+    <string name="settings_background">Page background</string>
+    <string name="settings_background_default">Default</string>
+    <string name="settings_background_image">Custom image</string>
+    <string name="settings_background_wallpaper">Wallpaper</string>
+    <string name="settings_background_image_row">Background image</string>
+    <string name="settings_background_image_hint">Pick a photo from your gallery</string>
+    <string name="settings_background_pick">Change</string>
+    <string name="settings_background_import_failed">Failed to import the image</string>
+    <string name="settings_background_wallpaper_row">Follow phone wallpaper</string>
+    <string name="settings_background_wallpaper_ok">Wallpaper loaded; updates when you return after changing it</string>
+    <string name="settings_background_wallpaper_colors">Cannot read the wallpaper image (live wallpaper or no root); using its colors</string>
+    <string name="settings_background_wallpaper_failed">Cannot read the wallpaper; using the default background</string>
+    <string name="settings_background_wallpaper_loading">Reading wallpaper…</string>
+    <string name="settings_background_refresh">Reload</string>
+    <string name="settings_background_blur">Background blur</string>
+    <string name="settings_background_dim">Background dimming</string>
+    <string name="settings_background_dim_hint">Darkens in dark mode, lightens in light mode to keep text legible</string>
 </resources>

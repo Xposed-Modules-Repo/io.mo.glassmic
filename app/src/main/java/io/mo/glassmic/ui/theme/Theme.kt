@@ -5,6 +5,21 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.mo.glassmic.data.appearance.BackgroundStore
+import io.mo.glassmic.data.appearance.WallpaperStatus
+import io.mo.glassmic.proto.BackgroundMode
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
@@ -77,8 +92,55 @@ data class GlassThemeState(
 
 @HiltViewModel
 class ThemeViewModel @Inject constructor(
-    configStore: ConfigStore
+    configStore: ConfigStore,
+    private val backgrounds: BackgroundStore
 ) : ViewModel() {
+    private val appearance = configStore.flow.map { it.appearance }
+
+    private val mode = appearance.map { it.backgroundMode }.distinctUntilChanged()
+
+    /** 背景图：只在来源 / 图片 / 壁纸版本变化时重新解码，拖动模糊与遮罩滑块不会读盘。 */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val image: Flow<ImageBitmap?> = combine(
+        appearance.map { it.backgroundMode to it.backgroundImagePath }.distinctUntilChanged(),
+        backgrounds.wallpaperStatus,
+        backgrounds.wallpaperVersion
+    ) { (m, path), status, version -> Triple(m to path, status, version) }
+        .distinctUntilChanged()
+        .mapLatest { (src, status, _) ->
+            val (m, path) = src
+            when {
+                m == BackgroundMode.BACKGROUND_IMAGE && path.isNotBlank() -> backgrounds.loadBitmap(backgrounds.file(path))
+                m == BackgroundMode.BACKGROUND_WALLPAPER && status == WallpaperStatus.IMAGE ->
+                    backgrounds.loadBitmap(backgrounds.wallpaperCacheFile())
+                else -> null
+            }
+        }
+
+    val backdrop: StateFlow<PageBackdrop> = combine(image, appearance, backgrounds.wallpaperColors) { img, a, colors ->
+        val m = a.backgroundMode
+        PageBackdrop(
+            image = img,
+            blur = if (a.hasBackgroundBlur()) a.backgroundBlur.coerceIn(0f, 1f) else PageBackdrop.DEFAULT_BLUR,
+            dim = if (a.hasBackgroundDim()) a.backgroundDim.coerceIn(0f, 1f) else PageBackdrop.DEFAULT_DIM,
+            glowColors = if (m == BackgroundMode.BACKGROUND_WALLPAPER && img == null) colors else emptyList()
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, PageBackdrop())
+
+    init {
+        // 切到「手机壁纸」时立即读取一次
+        viewModelScope.launch {
+            mode.collect { if (it == BackgroundMode.BACKGROUND_WALLPAPER) backgrounds.refreshWallpaper() }
+        }
+    }
+
+    /** 回到前台：若用「手机壁纸」，检查壁纸是否换过（未换则直接复用缓存）。 */
+    fun onResume() {
+        viewModelScope.launch {
+            if (mode.first() == BackgroundMode.BACKGROUND_WALLPAPER) backgrounds.refreshWallpaper()
+        }
+    }
+
     val state: StateFlow<GlassThemeState> = configStore.flow
         .map { cfg ->
             GlassThemeState(
@@ -93,8 +155,17 @@ class ThemeViewModel @Inject constructor(
 fun GlassMicTheme(content: @Composable () -> Unit) {
     val vm: ThemeViewModel = hiltViewModel()
     val state by vm.state.collectAsState()
+    val backdrop by vm.backdrop.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) vm.onResume() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
-    GlassThemeContent(state.theme, state.glassEffect, state.reduceMotion, content)
+    CompositionLocalProvider(LocalPageBackdrop provides backdrop) {
+        GlassThemeContent(state.theme, state.glassEffect, state.reduceMotion, content)
+    }
 }
 
 /**

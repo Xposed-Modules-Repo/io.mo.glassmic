@@ -60,6 +60,7 @@ class SettingsViewModel @Inject constructor(
     private val audioPolicy: AudioPolicyController,
     private val runtime: RuntimeStateHolder,
     private val bundler: io.mo.glassmic.data.diag.DiagnosticBundler,
+    private val backgrounds: io.mo.glassmic.data.appearance.BackgroundStore,
     hookStatusRepo: HookStatusRepository
 ) : ViewModel() {
 
@@ -136,6 +137,44 @@ class SettingsViewModel @Inject constructor(
 
     fun setGlassEffect(enabled: Boolean) = viewModelScope.launch {
         configStore.update { it.setAppearance(it.appearance.toBuilder().setGlassEffect(enabled)) }
+    }
+
+    // ============ 页面背景 ============
+    val wallpaperStatus = backgrounds.wallpaperStatus
+
+    private val _backgroundError = MutableStateFlow<String?>(null)
+    val backgroundError: StateFlow<String?> = _backgroundError.asStateFlow()
+    fun consumeBackgroundError() { _backgroundError.value = null }
+
+    fun setBackgroundMode(mode: io.mo.glassmic.proto.BackgroundMode) = viewModelScope.launch {
+        configStore.update { it.setAppearance(it.appearance.toBuilder().setBackgroundMode(mode)) }
+        if (mode == io.mo.glassmic.proto.BackgroundMode.BACKGROUND_WALLPAPER) backgrounds.refreshWallpaper(force = true)
+    }
+
+    /** 导入自选图片并切到「自选图片」背景。 */
+    fun setBackgroundImage(uri: Uri) = viewModelScope.launch {
+        val path = backgrounds.importImage(uri)
+        if (path == null) {
+            _backgroundError.value = AppLocale.string(context, io.mo.glassmic.R.string.settings_background_import_failed)
+            return@launch
+        }
+        configStore.update {
+            it.setAppearance(
+                it.appearance.toBuilder()
+                    .setBackgroundMode(io.mo.glassmic.proto.BackgroundMode.BACKGROUND_IMAGE)
+                    .setBackgroundImagePath(path)
+            )
+        }
+    }
+
+    fun refreshWallpaper() = viewModelScope.launch { backgrounds.refreshWallpaper(force = true) }
+
+    fun setBackgroundBlur(v: Float) = viewModelScope.launch {
+        configStore.update { it.setAppearance(it.appearance.toBuilder().setBackgroundBlur(v)) }
+    }
+
+    fun setBackgroundDim(v: Float) = viewModelScope.launch {
+        configStore.update { it.setAppearance(it.appearance.toBuilder().setBackgroundDim(v)) }
     }
 
     fun setReduceMotion(reduce: Boolean) = viewModelScope.launch {

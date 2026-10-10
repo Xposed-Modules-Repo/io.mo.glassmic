@@ -49,6 +49,11 @@ import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.R
 import io.mo.glassmic.data.config.audioPolicyTargets
 import io.mo.glassmic.proto.AppLanguage
+import io.mo.glassmic.proto.Appearance
+import io.mo.glassmic.proto.BackgroundMode
+import io.mo.glassmic.data.appearance.WallpaperStatus
+import io.mo.glassmic.ui.theme.PageBackdrop
+import androidx.activity.result.PickVisualMediaRequest
 import io.mo.glassmic.proto.FloatingSize
 import io.mo.glassmic.proto.InjectionBackend
 import io.mo.glassmic.proto.PlaybackPolicy
@@ -91,6 +96,19 @@ fun SettingsScreen(
     LaunchedEffect(iconError) {
         iconError?.let { toast.showSnackbar(it); vm.consumeIconError() }
     }
+    val backgroundError by vm.backgroundError.collectAsState()
+    LaunchedEffect(backgroundError) {
+        backgroundError?.let { toast.showSnackbar(it); vm.consumeBackgroundError() }
+    }
+    val wallpaperStatus by vm.wallpaperStatus.collectAsState()
+    // 系统照片选择器：无需存储权限
+    val backgroundPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) vm.setBackgroundImage(uri) }
+    val pickBackground = {
+        backgroundPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
     val iconPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) vm.setFloatingIcon(uri) }
@@ -172,6 +190,19 @@ fun SettingsScreen(
                         }
                     )
                 }
+                BackgroundRows(
+                    appearance = cfg.appearance,
+                    wallpaperStatus = wallpaperStatus,
+                    onMode = { mode ->
+                        // 选「自选图片」但还没有图片时，直接打开选择器；选好才真正切换
+                        if (mode == BackgroundMode.BACKGROUND_IMAGE && cfg.appearance.backgroundImagePath.isBlank()) pickBackground()
+                        else vm.setBackgroundMode(mode)
+                    },
+                    onPick = pickBackground,
+                    onRefreshWallpaper = vm::refreshWallpaper,
+                    onBlur = vm::setBackgroundBlur,
+                    onDim = vm::setBackgroundDim
+                )
                 ToggleRow(
                     title = stringResource(R.string.settings_glass_effect),
                     subtitle = stringResource(R.string.settings_glass_effect_hint),
@@ -485,4 +516,69 @@ internal fun providerLabel(p: TtsProvider): String = when (p) {
     TtsProvider.GEMINI -> "Gemini"
     TtsProvider.MIMO -> "MiMo"
     else -> "OpenAI"
+}
+
+// ============ 页面背景 ============
+@Composable
+private fun BackgroundRows(
+    appearance: Appearance,
+    wallpaperStatus: WallpaperStatus,
+    onMode: (BackgroundMode) -> Unit,
+    onPick: () -> Unit,
+    onRefreshWallpaper: () -> Unit,
+    onBlur: (Float) -> Unit,
+    onDim: (Float) -> Unit
+) {
+    val mode = if (appearance.backgroundMode == BackgroundMode.UNRECOGNIZED) BackgroundMode.BACKGROUND_DEFAULT
+               else appearance.backgroundMode
+    StackedRow(stringResource(R.string.settings_background)) {
+        Segmented(
+            options = listOf(
+                BackgroundMode.BACKGROUND_DEFAULT to stringResource(R.string.settings_background_default),
+                BackgroundMode.BACKGROUND_IMAGE to stringResource(R.string.settings_background_image),
+                BackgroundMode.BACKGROUND_WALLPAPER to stringResource(R.string.settings_background_wallpaper)
+            ),
+            selected = mode,
+            onSelect = onMode
+        )
+    }
+    when (mode) {
+        BackgroundMode.BACKGROUND_IMAGE -> SettingRow(
+            title = stringResource(R.string.settings_background_image_row),
+            subtitle = stringResource(R.string.settings_background_image_hint)
+        ) {
+            SoftButton(stringResource(R.string.settings_background_pick), onPick, height = 32.dp)
+        }
+        BackgroundMode.BACKGROUND_WALLPAPER -> SettingRow(
+            title = stringResource(R.string.settings_background_wallpaper_row),
+            subtitle = stringResource(
+                when (wallpaperStatus) {
+                    WallpaperStatus.IMAGE -> R.string.settings_background_wallpaper_ok
+                    WallpaperStatus.COLORS_ONLY -> R.string.settings_background_wallpaper_colors
+                    WallpaperStatus.FAILED -> R.string.settings_background_wallpaper_failed
+                    WallpaperStatus.UNKNOWN -> R.string.settings_background_wallpaper_loading
+                }
+            )
+        ) {
+            SoftButton(stringResource(R.string.settings_background_refresh), onRefreshWallpaper, height = 32.dp)
+        }
+        else -> Unit
+    }
+    // 模糊 / 遮罩只对图片背景有意义
+    val hasImage = mode == BackgroundMode.BACKGROUND_IMAGE ||
+        (mode == BackgroundMode.BACKGROUND_WALLPAPER && wallpaperStatus == WallpaperStatus.IMAGE)
+    if (hasImage) {
+        val blur = if (appearance.hasBackgroundBlur()) appearance.backgroundBlur else PageBackdrop.DEFAULT_BLUR
+        StackedRow(stringResource(R.string.settings_background_blur), value = "%.0f%%".format(blur * 100)) {
+            GlassSlider(value = blur, onValueChange = onBlur)
+        }
+        val dim = if (appearance.hasBackgroundDim()) appearance.backgroundDim else PageBackdrop.DEFAULT_DIM
+        StackedRow(
+            stringResource(R.string.settings_background_dim),
+            subtitle = stringResource(R.string.settings_background_dim_hint),
+            value = "%.0f%%".format(dim * 100)
+        ) {
+            GlassSlider(value = dim, onValueChange = onDim, valueRange = 0f..0.8f)
+        }
+    }
 }

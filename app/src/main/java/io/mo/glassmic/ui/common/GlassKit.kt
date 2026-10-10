@@ -1,7 +1,19 @@
 package io.mo.glassmic.ui.common
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -73,6 +85,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.mo.glassmic.ui.theme.GlassTokens
 import io.mo.glassmic.ui.theme.LocalGlassTokens
+import io.mo.glassmic.ui.theme.LocalPageBackdrop
+import android.os.Build
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 
 /** 设计稿里 Geist Mono 的位置——数字、包名、时长统一走等宽字体。 */
@@ -90,42 +110,93 @@ val glass: GlassTokens
 @Composable
 fun GlassBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     val t = glass
-    Box(
-        modifier = modifier
+    val backdrop = LocalPageBackdrop.current
+    val image = backdrop.image
+    Box(modifier.fillMaxSize().background(t.bgBase)) {
+        if (image != null) {
+            ImageBackdrop(image, backdrop.blur, backdrop.dim)
+        } else {
+            OrbBackdrop(backdrop.glowColors)
+        }
+        content()
+    }
+}
+
+/** 自选图片 / 手机壁纸背景：铺满裁切 → 模糊 → 遮罩（深色压暗、浅色提亮）。 */
+@Composable
+private fun ImageBackdrop(image: ImageBitmap, blur: Float, dim: Float) {
+    val t = glass
+    // Android 12 以下不支持 Modifier.blur，用更重的遮罩补偿可读性
+    val canBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
             .fillMaxSize()
-            .background(t.bgBase)
-            .drawBehind {
-                if (!t.glass) return@drawBehind
-                val w = size.width
-                val h = size.height
-                fun glow(c: Color, cx: Float, cy: Float, r: Float) = drawCircle(
-                    Brush.radialGradient(listOf(c, Color.Transparent), center = Offset(cx, cy), radius = r),
+            .then(if (canBlur && blur > 0f) Modifier.blur((blur * 40f).dp, BlurredEdgeTreatment.Rectangle) else Modifier)
+    )
+    val alpha = (dim + if (!canBlur && blur > 0f) 0.15f else 0f).coerceIn(0f, 0.9f)
+    Box(Modifier.fillMaxSize().background((if (t.isDark) Color.Black else Color.White).copy(alpha = alpha)))
+}
+
+/**
+ * 默认背景：三团径向光晕 + 几颗缓慢漂移的彩色光球。
+ * [tint] 非空时（读不到壁纸图片、只取到壁纸主色）用它替换默认配色。
+ */
+@Composable
+private fun OrbBackdrop(tint: List<Color>) {
+    val t = glass
+    if (!t.glass) return
+    // 光球缓慢漂移：玻璃后面"有东西在流动"。减少动画时静止。
+    val drift = if (liquidEnabled()) {
+        rememberInfiniteTransition(label = "orbDrift").animateFloat(
+            initialValue = 0f,
+            targetValue = (2 * PI).toFloat(),
+            animationSpec = infiniteRepeatable(tween(28_000, easing = LinearEasing)),
+            label = "orbPhase"
+        )
+    } else null
+    fun pick(i: Int, fallback: Color) = if (tint.isEmpty()) fallback else tint[i % tint.size]
+    val glowA = pick(0, t.glowBlue).copy(alpha = t.glowBlue.alpha)
+    val glowB = pick(1, t.glowOrange).copy(alpha = t.glowOrange.alpha)
+    val glowC = pick(2, t.glowPurple).copy(alpha = t.glowPurple.alpha)
+    val orbs = listOf(
+        Color(0xFF3D7AFF), Color(0xFFFF8A3D), Color(0xFF7B5CFF), Color(0xFF22B5C4)
+    ).mapIndexed { i, c -> pick(i, c) }
+    Box(
+        Modifier.fillMaxSize().drawBehind {
+            val ph = drift?.value ?: 0f
+            val w = size.width
+            val h = size.height
+            fun glow(c: Color, cx: Float, cy: Float, r: Float) = drawCircle(
+                Brush.radialGradient(listOf(c, Color.Transparent), center = Offset(cx, cy), radius = r),
+                radius = r, center = Offset(cx, cy)
+            )
+            glow(glowA, 0f, 0f, w * 0.95f)
+            glow(glowB, w, h * 0.42f, w * 0.8f)
+            glow(glowC, w * 0.15f, h, w * 1.0f)
+            // 彩色光球：中心偏亮、边缘淡出
+            fun orb(edge: Color, cx: Float, cy: Float, r: Float) {
+                val core = lerp(edge, Color.White, 0.55f)
+                drawCircle(
+                    Brush.radialGradient(
+                        0f to core.copy(alpha = t.orbAlpha),
+                        0.55f to edge.copy(alpha = t.orbAlpha),
+                        0.71f to edge.copy(alpha = 0f),
+                        center = Offset(cx - r * 0.3f, cy - r * 0.4f),
+                        radius = r * 1.4f
+                    ),
                     radius = r, center = Offset(cx, cy)
                 )
-                glow(t.glowBlue, 0f, 0f, w * 0.95f)
-                glow(t.glowOrange, w, h * 0.42f, w * 0.8f)
-                glow(t.glowPurple, w * 0.15f, h, w * 1.0f)
-                // 彩色光球：中心亮、边缘淡出
-                fun orb(core: Color, edge: Color, cx: Float, cy: Float, r: Float) {
-                    val center = Offset(cx, cy)
-                    drawCircle(
-                        Brush.radialGradient(
-                            0f to core.copy(alpha = t.orbAlpha),
-                            0.55f to edge.copy(alpha = t.orbAlpha),
-                            0.71f to edge.copy(alpha = 0f),
-                            center = Offset(cx - r * 0.3f, cy - r * 0.4f),
-                            radius = r * 1.4f
-                        ),
-                        radius = r, center = center
-                    )
-                }
-                val d = density
-                orb(Color(0xFF9CBCFF), Color(0xFF3D7AFF), 55f * d, 185f * d, 125f * d)
-                orb(Color(0xFFFFD3A8), Color(0xFFFF8A3D), w - 45f * d, 345f * d, 95f * d)
-                orb(Color(0xFFCFC2FF), Color(0xFF7B5CFF), 130f * d, 620f * d, 100f * d)
-                orb(Color(0xFFB5F1EA), Color(0xFF22B5C4), w - 60f * d, 790f * d, 90f * d)
-            },
-        content = content
+            }
+            val d = density
+            val a = 26f * d
+            orb(orbs[0], 55f * d + a * sin(ph), 185f * d + a * cos(ph * 2), 125f * d)
+            orb(orbs[1], w - 45f * d + a * cos(ph), 345f * d + a * sin(ph * 2), 95f * d)
+            orb(orbs[2], 130f * d - a * sin(ph * 2), 620f * d + a * cos(ph), 100f * d)
+            orb(orbs[3], w - 60f * d - a * cos(ph * 2), 790f * d - a * sin(ph), 90f * d)
+        }
     )
 }
 
@@ -166,11 +237,12 @@ fun GlassCard(
     val elevation = if (t.glass) 14.dp else 0.dp
     Column(
         modifier = modifier
+            .then(if (onClick != null) Modifier.liquidClickable(pressed = 0.98f, onClick = onClick) else Modifier)
             .shadow(elevation, shape, ambientColor = t.shadowColor, spotColor = t.shadowColor)
             .clip(shape)
             .background(t.bgBase.copy(alpha = if (t.glass) 0.35f else 0f))
             .background(t.card)
-            .border(BorderStroke(1.dp, t.border), shape)
+            .border(BorderStroke(1.dp, t.rim), shape)
             .drawWithContent {
                 drawContent()
                 if (t.highlight.alpha > 0f) {
@@ -181,7 +253,6 @@ fun GlassCard(
                     )
                 }
             }
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(contentPadding),
         content = content
     )
@@ -298,11 +369,11 @@ fun GlassIconButton(
     val t = glass
     Box(
         modifier = Modifier
+            .liquidClickable(pressed = 0.9f, onClick = onClick)
             .size(size)
             .clip(CircleShape)
             .background(t.card)
-            .border(BorderStroke(1.dp, t.border), CircleShape)
-            .clickable(onClick = onClick),
+            .border(BorderStroke(1.dp, t.rim), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription, tint = t.ink, modifier = Modifier.size(18.dp).offset(x = iconOffset))
@@ -393,15 +464,27 @@ fun StackedRow(
 
 // ============ 控件 ============
 
-/** 48×28 的胶囊开关，选中为主色、滑块白色带投影。 */
+/**
+ * 48×28 的液态开关：按住时滑块被拉宽（像被手指压扁的水滴），松手后弹簧回到位置并略过冲。
+ */
 @Composable
 fun GlassToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
     val t = glass
-    val reduce = LocalReduceMotion.current
-    val x by animateDpAsState(if (checked) 22.dp else 2.dp, if (reduce) snap() else tween(180), label = "toggleX")
+    val animate = liquidEnabled()
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val thumbW by animateDpAsState(
+        if (pressed && enabled && animate) 32.dp else 24.dp,
+        if (animate) spring(dampingRatio = 0.55f, stiffness = 700f) else snap(), label = "thumbW"
+    )
+    // 滑块贴住所在一侧伸缩：关时左贴 2dp，开时右贴 2dp
+    val x by animateDpAsState(
+        if (checked) 46.dp - thumbW else 2.dp,
+        if (animate) spring(dampingRatio = 0.58f, stiffness = 420f) else snap(), label = "toggleX"
+    )
     val track by animateColorAsState(
         if (checked) t.primary else if (t.isDark) Color.White.copy(alpha = 0.18f) else t.ink.copy(alpha = 0.14f),
-        if (reduce) snap() else tween(180), label = "toggleTrack"
+        if (animate) tween(220) else snap(), label = "toggleTrack"
     )
     Box(
         modifier = Modifier
@@ -409,19 +492,21 @@ fun GlassToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: B
             .size(48.dp, 28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(track)
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .clickable(interactionSource = source, indication = null, enabled = enabled) { onCheckedChange(!checked) }
     ) {
         Box(
             Modifier
                 .offset(x = x, y = 2.dp)
-                .size(24.dp)
-                .shadow(3.dp, CircleShape)
-                .background(if (!checked && t.isDark) Color(0xFFE8E9EC) else Color.White, CircleShape)
+                .size(thumbW, 24.dp)
+                .shadow(3.dp, RoundedCornerShape(12.dp))
+                .background(if (!checked && t.isDark) Color(0xFFE8E9EC) else Color.White, RoundedCornerShape(12.dp))
         )
     }
 }
 
-/** iOS 风分段控件：填充底 + 选中块（浅色白底带阴影 / 深色半透白）。 */
+/**
+ * iOS 风分段控件：填充底 + 水滴式选中块。切换时选中块沿移动方向被拉长、到位后回弹成形。
+ */
 @Composable
 fun <T> Segmented(
     options: List<Pair<T, String>>,
@@ -434,7 +519,10 @@ fun <T> Segmented(
 ) {
     val t = glass
     val outer = if (height >= 38.dp) 14.dp else 12.dp
-    Row(
+    val shape = RoundedCornerShape(outer - 3.dp)
+    val index = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+    val edges = rememberLiquidEdges(index)
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(outer))
@@ -442,29 +530,40 @@ fun <T> Segmented(
             .padding(3.dp)
             .alpha(if (enabled) 1f else 0.5f)
     ) {
-        options.forEach { (value, label) ->
-            val on = value == selected
-            val shape = RoundedCornerShape(outer - 3.dp)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(height)
-                    .then(if (on && t.segShadow) Modifier.shadow(2.dp, shape) else Modifier)
-                    .clip(shape)
-                    .background(if (on) t.segOn else Color.Transparent)
-                    .clickable(enabled = enabled) { onSelect(value) },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    label,
-                    fontSize = fontSize,
-                    color = if (on) t.ink else t.ink2,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
+        val slot = maxWidth / options.size.coerceAtLeast(1)
+        // 选中块：宽度随左右边缘伸缩，被拉长时纵向略收，像流动的水滴
+        Box(
+            Modifier
+                .offset(x = slot * edges.start)
+                .width(slot * (edges.end - edges.start))
+                .height(height)
+                .graphicsLayer { scaleY = 1f - 0.14f * edges.stretch }
+                .then(if (t.segShadow) Modifier.shadow(2.dp, shape) else Modifier)
+                .clip(shape)
+                .background(t.segOn)
+        )
+        Row(Modifier.fillMaxWidth()) {
+            options.forEachIndexed { i, (value, label) ->
+                val on = i == index
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(height)
+                        .clip(shape)
+                        .clickable(enabled = enabled) { onSelect(value) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        fontSize = fontSize,
+                        color = if (on) t.ink else t.ink2,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
             }
         }
     }
@@ -487,11 +586,11 @@ fun PrimaryButton(
     val shape = RoundedCornerShape(height / 2)
     Row(
         modifier = modifier
+            .liquidClickable(enabled = enabled, onClick = onClick)
             .height(height)
             .then(if (enabled && t.glass) Modifier.shadow(10.dp, shape, ambientColor = bg, spotColor = bg) else Modifier)
             .clip(shape)
             .background(bg)
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
@@ -519,10 +618,10 @@ fun SoftButton(
     val t = glass
     Box(
         modifier = modifier
+            .liquidClickable(enabled = enabled, pressed = 0.94f, onClick = onClick)
             .height(height)
             .clip(RoundedCornerShape(height / 2))
             .background(if (background == Color.Unspecified) t.fill else background)
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -547,12 +646,12 @@ fun OutlineGlassButton(text: String, onClick: () -> Unit, modifier: Modifier = M
     val shape = RoundedCornerShape(height / 2)
     Box(
         modifier = modifier
+            .liquidClickable(enabled = enabled, onClick = onClick)
             .fillMaxWidth()
             .height(height)
             .clip(shape)
             .background(t.card)
-            .border(BorderStroke(1.dp, t.border), shape)
-            .clickable(enabled = enabled, onClick = onClick),
+            .border(BorderStroke(1.dp, t.rim), shape),
         contentAlignment = Alignment.Center
     ) {
         Text(text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (enabled) t.ink else t.ink3)
@@ -764,11 +863,11 @@ fun SheetAction(label: String, onClick: () -> Unit, color: Color = Color.Unspeci
     val t = glass
     Row(
         Modifier
+            .liquidClickable(pressed = 0.97f, onClick = onClick)
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(t.fill)
-            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

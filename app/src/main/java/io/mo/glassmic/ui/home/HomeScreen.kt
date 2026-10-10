@@ -70,6 +70,7 @@ import io.mo.glassmic.ui.common.MonoFamily
 import io.mo.glassmic.ui.common.Segmented
 import io.mo.glassmic.ui.common.SoftButton
 import io.mo.glassmic.ui.common.glass
+import io.mo.glassmic.ui.common.liquidClickable
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -268,10 +269,10 @@ private fun MicHero(state: HomeUiState, onToggle: () -> Unit) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Box(
                 Modifier
+                    .liquidClickable(pressed = 0.92f, onClick = onToggle)
                     .size(132.dp)
                     .clip(CircleShape)
-                    .background(ring)
-                    .clickable(onClick = onToggle),
+                    .background(ring),
                 contentAlignment = Alignment.Center
             ) {
                 Box(
@@ -359,11 +360,11 @@ private fun NowPlayingCard(
                 if (state.hasFileSource) {
                     Box(
                         Modifier
+                            .liquidClickable(pressed = 0.9f, onClick = onTogglePause)
                             .size(52.dp)
                             .shadow(10.dp, CircleShape, ambientColor = t.primary, spotColor = t.primary)
                             .background(t.primary, CircleShape)
-                            .clip(CircleShape)
-                            .clickable(onClick = onTogglePause),
+                            .clip(CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(

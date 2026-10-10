@@ -24,7 +24,16 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
+import androidx.navigation.NavBackStackEntry
 import androidx.compose.runtime.SideEffect
 import androidx.core.view.WindowCompat
 import io.mo.glassmic.ui.theme.LocalGlassTokens
@@ -40,6 +49,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.currentBackStackEntryAsState
 import io.mo.glassmic.ui.common.glass
+import io.mo.glassmic.ui.common.liquidClickable
+import io.mo.glassmic.ui.common.rememberLiquidEdges
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.graphicsLayer
 import io.mo.glassmic.ui.common.SplashOverlay
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 import androidx.compose.runtime.mutableStateOf
@@ -181,7 +196,37 @@ private fun AppNavHost(nav: NavHostController, gate: GateDecision) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        NavHost(nav, startDestination = start) {
+        val reduceMotion = LocalReduceMotion.current
+        val isTab: (NavBackStackEntry) -> Boolean = { e -> TABS.any { it.route == e.destination.route } }
+        NavHost(
+            nav,
+            startDestination = start,
+            // 默认的 700ms 交叉淡化会让两页玻璃背景半透明叠在一起，显得发灰发糊：
+            // 标签之间用很短的淡入（旧页几乎立刻退场），进入二级页用 iOS 式右侧推入 + 底页视差。
+            enterTransition = {
+                when {
+                    reduceMotion -> EnterTransition.None
+                    isTab(initialState) && isTab(targetState) -> fadeIn(tween(180, delayMillis = 40))
+                    else -> slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+                }
+            },
+            exitTransition = {
+                when {
+                    reduceMotion -> ExitTransition.None
+                    isTab(initialState) && isTab(targetState) -> fadeOut(tween(60))
+                    else -> slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 4 } +
+                        fadeOut(tween(320), targetAlpha = 0.6f)
+                }
+            },
+            popEnterTransition = {
+                if (reduceMotion) EnterTransition.None
+                else slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 4 }
+            },
+            popExitTransition = {
+                if (reduceMotion) ExitTransition.None
+                else slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { it }
+            }
+        ) {
             composable(Routes.ONBOARDING) {
                 OnboardingFlow(onCompleted = {
                     nav.navigate(Routes.HOME) {
@@ -229,34 +274,47 @@ private fun AppNavHost(nav: NavHostController, gate: GateDecision) {
     }
 }
 
-/** 浮动玻璃底栏：三枚 92×52 胶囊，选中项主色淡底。 */
+/** 浮动玻璃底栏：三枚 92×52 胶囊，选中块像水滴一样在标签间流动。 */
 @Composable
 private fun GlassTabBar(current: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     val t = glass
     val shape = RoundedCornerShape(32.dp)
-    Row(
+    val index = TABS.indexOfFirst { it.route == current }.coerceAtLeast(0)
+    val edges = rememberLiquidEdges(index)
+    val slot = 92.dp
+    val gap = 4.dp
+    Box(
         modifier = modifier
             .shadow(if (t.glass) 18.dp else 8.dp, shape, ambientColor = t.shadowColor, spotColor = t.shadowColor)
             .clip(shape)
             .background(t.bar)
-            .border(BorderStroke(1.dp, t.barBorder), shape)
-            .padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+            .border(BorderStroke(1.dp, t.rim), shape)
+            .padding(6.dp)
     ) {
-        TABS.forEach { tab ->
-            val on = tab.route == current
-            val color = if (on) t.primaryInk else t.ink2
-            Column(
-                modifier = Modifier
-                    .size(92.dp, 52.dp)
-                    .clip(RoundedCornerShape(26.dp))
-                    .background(if (on) t.primarySoft else Color.Transparent)
-                    .clickable { if (!on) onSelect(tab.route) },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(tab.icon, null, tint = color, modifier = Modifier.size(22.dp))
-                Text(stringResource(tab.label), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        // 水滴选中块：左右边缘分别跟随，移动中被拉长、纵向略收
+        Box(
+            Modifier
+                .offset(x = (slot + gap) * edges.start)
+                .width((slot + gap) * (edges.end - edges.start) - gap)
+                .height(52.dp)
+                .graphicsLayer { scaleY = 1f - 0.12f * edges.stretch }
+                .clip(RoundedCornerShape(26.dp))
+                .background(t.primarySoft)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+            TABS.forEachIndexed { i, tab ->
+                val on = i == index
+                val color = if (on) t.primaryInk else t.ink2
+                Column(
+                    modifier = Modifier
+                        .liquidClickable(pressed = 0.9f) { if (!on) onSelect(tab.route) }
+                        .size(slot, 52.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(tab.icon, null, tint = color, modifier = Modifier.size(22.dp))
+                    Text(stringResource(tab.label), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

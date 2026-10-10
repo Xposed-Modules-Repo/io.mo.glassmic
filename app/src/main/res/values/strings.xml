@@ -459,4 +459,21 @@
     <string name="float_tts_preview">试听</string>
     <string name="float_tts_preview_stop">停止</string>
     <string name="waveform_title">实时波形</string>
+    <string name="settings_background">页面背景</string>
+    <string name="settings_background_default">默认</string>
+    <string name="settings_background_image">自选图片</string>
+    <string name="settings_background_wallpaper">手机壁纸</string>
+    <string name="settings_background_image_row">背景图片</string>
+    <string name="settings_background_image_hint">从相册选择一张图片作为背景</string>
+    <string name="settings_background_pick">更换图片</string>
+    <string name="settings_background_import_failed">背景图片导入失败</string>
+    <string name="settings_background_wallpaper_row">跟随手机壁纸</string>
+    <string name="settings_background_wallpaper_ok">已读取壁纸，换壁纸后回到璃麦自动更新</string>
+    <string name="settings_background_wallpaper_colors">读不到壁纸图片（动态壁纸或未授予 Root），已改用壁纸主色</string>
+    <string name="settings_background_wallpaper_failed">无法读取壁纸，已回退默认背景</string>
+    <string name="settings_background_wallpaper_loading">正在读取壁纸…</string>
+    <string name="settings_background_refresh">重新读取</string>
+    <string name="settings_background_blur">背景模糊</string>
+    <string name="settings_background_dim">背景遮罩</string>
+    <string name="settings_background_dim_hint">深色模式压暗、浅色模式提亮，保证文字清晰</string>
 </resources>

@@ -163,6 +163,21 @@ message Appearance {
   AppLanguage language = 4;
   // false 时启动逻辑会按系统语言自动写入 language 并置为 true，此后不再自动改写。
   bool language_resolved = 5;
+
+  // 页面背景：默认光斑 / 自选图片 / 跟随手机壁纸
+  BackgroundMode background_mode = 6;
+  // 自选图片的相对路径（filesDir 下，如 background/custom_xxx.jpg）
+  string background_image_path = 7;
+  // 背景模糊程度 0..1（未设置时按 0.5）
+  optional float background_blur = 8;
+  // 背景暗化/提亮遮罩强度 0..1（未设置时按 0.35），保证卡片文字可读
+  optional float background_dim = 9;
+}
+
+enum BackgroundMode {
+  BACKGROUND_DEFAULT = 0;
+  BACKGROUND_IMAGE = 1;
+  BACKGROUND_WALLPAPER = 2;
 }
 
 enum ThemeMode {

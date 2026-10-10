@@ -77,6 +77,7 @@ import io.mo.glassmic.ui.common.GlassToggle
 import io.mo.glassmic.ui.common.MonoFamily
 import io.mo.glassmic.ui.common.Segmented
 import io.mo.glassmic.ui.common.glass
+import io.mo.glassmic.ui.common.liquidClickable
 import io.mo.glassmic.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.flow.Flow
 import java.io.File
@@ -321,7 +322,7 @@ private fun PanelShell(
                 .shadow(16.dp, shape, ambientColor = Color.Black.copy(alpha = 0.3f), spotColor = Color.Black.copy(alpha = 0.3f))
                 .clip(shape)
                 .background(t.sheet)
-                .border(BorderStroke(1.dp, t.border), shape)
+                .border(BorderStroke(1.dp, t.rim), shape)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -339,10 +340,10 @@ private fun PanelShell(
 private fun CollapsePill(onClick: () -> Unit) {
     Box(
         Modifier
+            .liquidClickable(pressed = 0.92f, onClick = onClick)
             .height(34.dp)
             .clip(RoundedCornerShape(17.dp))
             .background(glass.fill)
-            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -354,7 +355,7 @@ private fun CollapsePill(onClick: () -> Unit) {
 private fun CircleIconButton(icon: ImageVector, desc: String, onClick: () -> Unit, iconOffset: Dp = 0.dp) {
     val t = glass
     Box(
-        Modifier.size(34.dp).clip(CircleShape).background(t.fill).clickable(onClick = onClick),
+        Modifier.liquidClickable(pressed = 0.88f, onClick = onClick).size(34.dp).clip(CircleShape).background(t.fill),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, desc, tint = t.ink, modifier = Modifier.padding(start = iconOffset).size(17.dp))
@@ -417,7 +418,7 @@ private fun Ball(
             .clip(CircleShape)
             .background(t.sheet)
             .background(t.bar)
-            .border(BorderStroke(1.dp, t.border), CircleShape),
+            .border(BorderStroke(1.dp, t.rim), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Box(
@@ -465,10 +466,10 @@ private fun ColumnScope.LibraryTab(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
+                .liquidClickable(enabled = activeFile, pressed = 0.9f, onClick = onTogglePause)
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(if (activeFile) t.primary else t.fill)
-                .clickable(enabled = activeFile, onClick = onTogglePause),
+                .background(if (activeFile) t.primary else t.fill),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -735,10 +736,10 @@ private fun TtsButton(
     val t = glass
     Box(
         modifier
+            .liquidClickable(enabled = enabled, pressed = 0.94f, onClick = onClick)
             .height(46.dp)
             .clip(RoundedCornerShape(23.dp))
             .background(if (background == Color.Unspecified) t.fill else background)
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -843,10 +844,10 @@ private fun DelayChip(label: String, selected: Boolean, onClick: () -> Unit, mod
     val t = glass
     Box(
         modifier
+            .liquidClickable(pressed = 0.92f, onClick = onClick)
             .height(36.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) t.primary else t.fill)
-            .clickable(onClick = onClick),
+            .background(if (selected) t.primary else t.fill),
         contentAlignment = Alignment.Center
     ) {
         Text(

@@ -44,6 +44,8 @@ data class GlassTokens(
     /** 未选中但需要"卡片底"的小元素（分组 chip 等）用的近似纯色。 */
     val cardFlat: Color,
     val border: Color,
+    /** 玻璃边缘受光：左上亮、右下淡，营造玻璃厚度。 */
+    val rim: Brush,
     /** 卡片顶部 1px 内高光。 */
     val highlight: Color,
     val shadowColor: Color,
@@ -97,6 +99,15 @@ fun glassTokens(dark: Boolean, glass: Boolean): GlassTokens {
         ),
         cardFlat = if (dark) Color.White.copy(alpha = 0.09f) else Color.White.copy(alpha = 0.5f),
         border = if (dark) Color.White.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.9f),
+        rim = if (dark) Brush.linearGradient(
+            0f to Color.White.copy(alpha = 0.42f),
+            0.45f to Color.White.copy(alpha = 0.08f),
+            1f to Color.White.copy(alpha = 0.22f)
+        ) else Brush.linearGradient(
+            0f to Color.White,
+            0.45f to Color.White.copy(alpha = 0.45f),
+            1f to Color.White.copy(alpha = 0.85f)
+        ),
         highlight = if (dark) Color.White.copy(alpha = 0.22f) else Color.White,
         shadowColor = if (dark) Color.Black.copy(alpha = 0.35f) else Color(0xFF283278).copy(alpha = 0.14f),
         bar = if (dark) Brush.verticalGradient(
@@ -119,6 +130,7 @@ fun glassTokens(dark: Boolean, glass: Boolean): GlassTokens {
         card = SolidColor(solid),
         cardFlat = solid,
         border = if (dark) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.06f),
+        rim = SolidColor(if (dark) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.06f)),
         highlight = Color.Transparent,
         shadowColor = Color.Transparent,
         bar = SolidColor(solid),
