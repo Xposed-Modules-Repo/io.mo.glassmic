@@ -1,14 +1,15 @@
 package io.mo.glassmic.ui.settings
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.ui.unit.sp
+import io.mo.glassmic.ui.common.GlassSlider
+import io.mo.glassmic.ui.common.GlassTextField
+import io.mo.glassmic.ui.common.SoftButton
+import io.mo.glassmic.ui.common.glass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,7 +76,7 @@ internal fun AudioBandSection(config: AudioBand, onEnabled: (Boolean) -> Unit, o
             }
         )
         if (band.enabled) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FrequencyControl(
                     stringResource(R.string.settings_band_low), lowText,
                     (low ?: band.lowHz).coerceIn(BandSettings.MIN_HZ, BandSettings.MAX_HZ - 1),
@@ -96,15 +97,9 @@ internal fun AudioBandSection(config: AudioBand, onEnabled: (Boolean) -> Unit, o
                     },
                     onFinished = apply
                 )
-                if (!valid) Text(
-                    stringResource(R.string.settings_band_invalid),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                TextButton(onClick = apply, enabled = valid) {
-                    Text(stringResource(R.string.settings_band_apply))
-                }
-                Text(stringResource(R.string.settings_band_preview_hint), style = MaterialTheme.typography.bodySmall)
+                if (!valid) Text(stringResource(R.string.settings_band_invalid), color = glass.err, fontSize = 12.sp)
+                SoftButton(stringResource(R.string.settings_band_apply), apply, enabled = valid, textColor = glass.primaryInk)
+                Text(stringResource(R.string.settings_band_preview_hint), fontSize = 12.sp, lineHeight = 17.sp, color = glass.ink3)
             }
         }
     }
@@ -115,19 +110,18 @@ private fun FrequencyControl(
     label: String, text: String, value: Int, isError: Boolean,
     onText: (String) -> Unit, onSlide: (Int) -> Unit, onFinished: () -> Unit
 ) {
-    OutlinedTextField(
+    Text(label, fontSize = 13.sp, color = glass.ink2)
+    GlassTextField(
         value = text,
         onValueChange = { if (it.length <= 5 && it.all { c -> c in '0'..'9' }) onText(it) },
-        label = { Text(label) },
-        suffix = { Text("Hz") },
-        singleLine = true,
+        suffix = "Hz",
+        mono = true,
         isError = isError,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth()
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
     )
     val minLog = ln(BandSettings.MIN_HZ.toFloat())
     val span = ln(BandSettings.MAX_HZ.toFloat()) - minLog
-    Slider(
+    GlassSlider(
         value = ((ln(value.toFloat()) - minLog) / span).coerceIn(0f, 1f),
         onValueChange = { onSlide(exp(minLog + it * span).roundToInt().coerceIn(20, 20000)) },
         onValueChangeFinished = onFinished

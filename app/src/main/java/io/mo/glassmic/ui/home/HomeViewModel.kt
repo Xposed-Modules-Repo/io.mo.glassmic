@@ -50,7 +50,13 @@ data class HomeUiState(
     val interceptBytes: Long = 0L,
     val interceptLastMs: Long = 0L,
     val interceptLastPkg: String? = null,
-    val audioPolicyBackend: Boolean = false
+    val audioPolicyBackend: Boolean = false,
+    val playbackPolicy: ProtoPolicy = ProtoPolicy.LOOP,
+    val sourceEmoji: String = "🎵",
+    val groupPlainName: String = "",
+    /** 生效范围卡片上展示的前几个应用包名。 */
+    val scopePackages: List<String> = emptyList(),
+    val scopeAllApps: Boolean = false
 )
 
 @HiltViewModel
@@ -95,6 +101,20 @@ class HomeViewModel @Inject constructor(
                 SourceType.TTS -> AppLocale.string(context, R.string.source_tts)
             },
             groupName = group?.let { "${it.emoji} ${it.name}" } ?: "—",
+            sourceEmoji = when (rt.currentSourceType) {
+                SourceType.FILE -> group?.emoji ?: "🎵"
+                SourceType.TTS -> "🗣"
+                SourceType.SILENCE -> "🔇"
+                SourceType.REAL_MIC -> "🎙️"
+            },
+            groupPlainName = when (rt.currentSourceType) {
+                SourceType.FILE -> group?.name.orEmpty()
+                else -> ""
+            },
+            playbackPolicy = cfg.playbackPolicy,
+            scopeAllApps = cfg.injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY && cfg.audioPolicyAllApps,
+            scopePackages = (if (cfg.injectionBackend == io.mo.glassmic.proto.InjectionBackend.AUDIO_POLICY)
+                cfg.audioPolicyTargets() else cfg.whitelistList).take(4),
             policyLabel = when (cfg.playbackPolicy) {
                 ProtoPolicy.SILENCE -> AppLocale.string(context, R.string.home_policy_silence)
                 ProtoPolicy.LOOP -> AppLocale.string(context, R.string.library_policy_loop)
@@ -160,6 +180,10 @@ class HomeViewModel @Inject constructor(
         } else {
             FloatingWindowService.start(context)
         }
+    }
+
+    fun setPolicy(policy: ProtoPolicy) {
+        viewModelScope.launch { configStore.update { it.setPlaybackPolicy(policy) } }
     }
 
     fun restoreRealMic() {

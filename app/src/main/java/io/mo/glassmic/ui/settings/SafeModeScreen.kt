@@ -1,23 +1,22 @@
 package io.mo.glassmic.ui.settings
 
+import android.content.Intent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -26,24 +25,32 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import android.content.Intent
-import androidx.compose.ui.platform.LocalContext
+import io.mo.glassmic.ui.common.GlassCard
+import io.mo.glassmic.ui.common.GlassPage
+import io.mo.glassmic.ui.common.MonoFamily
+import io.mo.glassmic.ui.common.OutlineGlassButton
+import io.mo.glassmic.ui.common.PrimaryButton
+import io.mo.glassmic.ui.common.glass
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import io.mo.glassmic.R
 import io.mo.glassmic.core.model.SafeModeInfo
 import io.mo.glassmic.core.model.SafeModeReason
 import io.mo.glassmic.data.diag.DiagnosticBundler
 import io.mo.glassmic.data.runtime.RuntimeStateHolder
 import io.mo.glassmic.data.runtime.SafeModeRepository
-import io.mo.glassmic.ui.common.GlassSurface
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -81,49 +88,52 @@ fun SafeModeScreen(
     val info by vm.info.collectAsState()
     var confirming by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val t = glass
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    GlassPage {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(24.dp)
+                .padding(start = 18.dp, end = 18.dp, top = 52.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            GlassSurface(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 24.dp,
-                tintAlpha = 0.25f
+            Box(
+                Modifier.size(72.dp).background(t.errSoft, RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                Icon(Icons.Rounded.GppMaybe, null, tint = t.err, modifier = Modifier.size(36.dp))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    stringResource(R.string.safe_mode_title),
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 35.sp, letterSpacing = (-0.5).sp
+                )
+                Text(stringResource(R.string.safe_mode_subtitle), fontSize = 16.sp, fontWeight = FontWeight.Medium, color = t.err)
+            }
+            GlassCard(Modifier.fillMaxWidth(), contentPadding = PaddingValues(18.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        stringResource(R.string.safe_mode_title),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold
+                        info?.reason?.let(::reasonText) ?: "原因：未知",
+                        fontSize = 14.sp, lineHeight = 22.sp, color = t.ink2
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = info?.reason?.let(::reasonText) ?: "原因：未知",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.safe_mode_subtitle),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
+                    info?.occurredAt?.takeIf { it > 0 }?.let { ts ->
+                        Text(
+                            SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(ts)),
+                            fontSize = 12.sp, color = t.ink3, fontFamily = MonoFamily
+                        )
+                    }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            OutlinedButton(
+            Text(
+                stringResource(R.string.safe_mode_exit_confirm),
+                fontSize = 14.sp, lineHeight = 22.sp, color = t.ink2,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+            Spacer(Modifier.weight(1f))
+            OutlineGlassButton(
+                text = stringResource(R.string.safe_mode_export_diag),
+                height = 52.dp,
                 onClick = {
                     vm.exportDiagnostic(
                         onReady = { uri ->
@@ -132,38 +142,36 @@ fun SafeModeScreen(
                                 putExtra(Intent.EXTRA_STREAM, uri)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }
-                            runCatching { context.startActivity(Intent.createChooser(send, "导出诊断包")) }
+                            runCatching { context.startActivity(Intent.createChooser(send, context.getString(R.string.safe_mode_export_diag))) }
                         },
                         onError = { /* swallow; 日志已写 */ }
                     )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
-            ) { Text(stringResource(R.string.safe_mode_export_diag)) }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
+                }
+            )
+            PrimaryButton(
+                text = stringResource(R.string.safe_mode_exit),
                 onClick = { confirming = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
-            ) { Text(stringResource(R.string.safe_mode_exit)) }
+                color = t.ink,
+                contentColor = t.bgSolid,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text(stringResource(R.string.safe_mode_exit)) },
-            text = { Text(stringResource(R.string.safe_mode_exit_confirm)) },
+            shape = RoundedCornerShape(28.dp),
+            title = { Text(stringResource(R.string.safe_mode_exit), fontSize = 18.sp, fontWeight = FontWeight.SemiBold) },
+            text = { Text(stringResource(R.string.safe_mode_exit_confirm), fontSize = 14.sp) },
             confirmButton = {
                 TextButton(onClick = {
                     confirming = false
                     vm.exit(onExitComplete)
-                }) { Text("确认退出") }
+                }) { Text(stringResource(R.string.safe_mode_exit_confirm_button)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("取消") }
+                TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.library_cancel)) }
             }
         )
     }

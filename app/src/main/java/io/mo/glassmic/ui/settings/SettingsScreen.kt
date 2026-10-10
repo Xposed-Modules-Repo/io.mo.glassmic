@@ -8,7 +8,6 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,34 +16,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -55,75 +39,57 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import io.mo.glassmic.BuildConfig
 import io.mo.glassmic.R
 import io.mo.glassmic.data.config.audioPolicyTargets
-import io.mo.glassmic.data.diag.AudioPipelineProbe
 import io.mo.glassmic.proto.AppLanguage
-import io.mo.glassmic.proto.InjectionBackend
-import io.mo.glassmic.root.PolicyPhase
 import io.mo.glassmic.proto.FloatingSize
-import io.mo.glassmic.proto.LogLevel
+import io.mo.glassmic.proto.InjectionBackend
 import io.mo.glassmic.proto.PlaybackPolicy
-import io.mo.glassmic.proto.ScopeMode
 import io.mo.glassmic.proto.ThemeMode
 import io.mo.glassmic.proto.TtsProvider
+import io.mo.glassmic.root.PolicyPhase
 import io.mo.glassmic.service.GlassTileService
+import io.mo.glassmic.ui.common.GlassPage
+import io.mo.glassmic.ui.common.GlassSlider
+import io.mo.glassmic.ui.common.GroupCard
+import io.mo.glassmic.ui.common.LargeTitle
+import io.mo.glassmic.ui.common.MonoFamily
+import io.mo.glassmic.ui.common.RadioDot
+import io.mo.glassmic.ui.common.SectionLabel
+import io.mo.glassmic.ui.common.Segmented
+import io.mo.glassmic.ui.common.SettingRow
+import io.mo.glassmic.ui.common.SoftButton
+import io.mo.glassmic.ui.common.StackedRow
+import io.mo.glassmic.ui.common.ToggleRow
+import io.mo.glassmic.ui.common.glass
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onBack: () -> Unit,
-    onOpenScope: () -> Unit = {},
+    onOpenScope: () -> Unit,
     onOpenAiTts: () -> Unit,
-    onOpenDiagnostic: () -> Unit = {},
+    onOpenDiagnostic: () -> Unit,
     vm: SettingsViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsState()
     val policyStatus by vm.policyStatus.collectAsState()
     val runtimeState by vm.runtimeState.collectAsState()
-    val snackbar = remember { SnackbarHostState() }
+    val exporting by vm.exporting.collectAsState()
+    val toast = remember { SnackbarHostState() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
-    var versionTapCount by remember { mutableStateOf(0) }
-    var lastTapTime by remember { mutableStateOf(0L) }
-
-    val onVersionClick: () -> Unit = {
-        val now = System.currentTimeMillis()
-        if (now - lastTapTime > 1500L) {
-            versionTapCount = 1
-        } else {
-            versionTapCount++
-        }
-        lastTapTime = now
-
-        if (versionTapCount in 2..4) {
-            scope.launch {
-                snackbar.showSnackbar(
-                    context.getString(R.string.diag_hint_toast, 5 - versionTapCount)
-                )
-            }
-        } else if (versionTapCount >= 5) {
-            versionTapCount = 0
-            scope.launch {
-                snackbar.showSnackbar(context.getString(R.string.diag_entered_toast))
-            }
-            onOpenDiagnostic()
-        }
-    }
+    val t = glass
 
     val iconError by vm.iconError.collectAsState()
     LaunchedEffect(iconError) {
-        iconError?.let { snackbar.showSnackbar(it); vm.consumeIconError() }
+        iconError?.let { toast.showSnackbar(it); vm.consumeIconError() }
     }
     val iconPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -141,122 +107,150 @@ fun SettingsScreen(
                 if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
                     result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
                 ) {
-                    scope.launch {
-                        snackbar.showSnackbar(context.getString(R.string.settings_tile_added))
-                    }
+                    scope.launch { toast.showSnackbar(context.getString(R.string.settings_tile_added)) }
                 }
             }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                    }
+    val onExportDiag: () -> Unit = {
+        scope.launch { toast.showSnackbar(context.getString(R.string.diag_exporting)) }
+        vm.exportDiagnostic(
+            onReady = { uri ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbar) { Snackbar(snackbarData = it) } }
-    ) { inner ->
-        val cfg = state.config
-        val visCompat by vm.visibilityCompat.collectAsState()
-        // 每次进入设置页，按系统属性真实值刷新开关（属性非 1 显示关闭，避免误导）
-        LaunchedEffect(Unit) { vm.refreshVisibilityCompat() }
+                runCatching { context.startActivity(Intent.createChooser(send, context.getString(R.string.settings_export_diag))) }
+            },
+            onError = { e -> scope.launch { toast.showSnackbar(e.message ?: context.getString(R.string.settings_export_failed)) } }
+        )
+    }
+
+    val cfg = state.config
+    val visCompat by vm.visibilityCompat.collectAsState()
+    // 每次进入设置页，按系统属性真实值刷新开关（属性非 1 显示关闭，避免误导）
+    LaunchedEffect(Unit) { vm.refreshVisibilityCompat() }
+
+    GlassPage(toast) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            item { Section(stringResource(R.string.backend_title)) {
-                val canChange = !runtimeState.enabled &&
-                    policyStatus.phase !in listOf(PolicyPhase.STARTING, PolicyPhase.ACTIVE, PolicyPhase.STOPPING)
-                listOf(
-                    InjectionBackend.LSPOSED to stringResource(R.string.backend_lsposed),
-                    InjectionBackend.AUDIO_POLICY to stringResource(R.string.backend_audio_policy)
-                ).forEach { (backend, label) ->
-                    Row(Modifier.fillMaxWidth().clickable(enabled = canChange) { vm.setBackend(backend) },
-                        verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = cfg.injectionBackend == backend,
-                            onClick = { vm.setBackend(backend) }, enabled = canChange)
-                        Text(label, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                Text(stringResource(R.string.backend_switch_hint), style = MaterialTheme.typography.bodySmall)
-                if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
-                    Text(stringResource(R.string.backend_policy_hint), style = MaterialTheme.typography.bodySmall)
-                    Text(policyStatus.label(context), style = MaterialTheme.typography.bodySmall,
-                        color = if (policyStatus.phase == PolicyPhase.ERROR) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = onOpenScope) { Text(stringResource(R.string.scope_title)) }
-                    if (runtimeState.enabled && policyStatus.phase == PolicyPhase.ERROR) {
-                        TextButton(onClick = vm::retryAudioPolicy) { Text(stringResource(R.string.backend_retry)) }
-                    }
-                }
-            } }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                item { Section(stringResource(R.string.settings_section_tile)) {
-                    ActionRow(stringResource(R.string.settings_tile_add), onClick = onAddTile)
-                } }
-            }
+            item { LargeTitle(stringResource(R.string.settings_title)) }
 
+            // ============ 外观 ============
             item { Section(stringResource(R.string.settings_section_appearance)) {
-                ThemePicker(cfg.appearance.theme, vm::setTheme)
-                LanguagePicker(cfg.appearance.language) { lang ->
-                    vm.setLanguage(lang)
-                    // MainActivity 非 AppCompatActivity，Android 13 以下切换语言后需要手动
-                    // recreate() 才能让新的 attachBaseContext() 包装立即生效，而不必等下次冷启动。
-                    (context as? Activity)?.recreate()
+                StackedRow(stringResource(R.string.settings_theme)) {
+                    Segmented(
+                        options = listOf(
+                            ThemeMode.FOLLOW_SYSTEM to stringResource(R.string.settings_theme_follow),
+                            ThemeMode.LIGHT to stringResource(R.string.settings_theme_light),
+                            ThemeMode.DARK to stringResource(R.string.settings_theme_dark)
+                        ),
+                        selected = if (cfg.appearance.theme == ThemeMode.UNRECOGNIZED) ThemeMode.FOLLOW_SYSTEM else cfg.appearance.theme,
+                        onSelect = vm::setTheme
+                    )
                 }
+                StackedRow(stringResource(R.string.settings_language)) {
+                    Segmented(
+                        options = listOf(
+                            AppLanguage.SYSTEM to stringResource(R.string.settings_language_follow),
+                            AppLanguage.ZH to stringResource(R.string.settings_language_zh),
+                            AppLanguage.EN to stringResource(R.string.settings_language_en)
+                        ),
+                        selected = if (cfg.appearance.language == AppLanguage.UNRECOGNIZED) AppLanguage.SYSTEM else cfg.appearance.language,
+                        onSelect = { lang ->
+                            if (lang != cfg.appearance.language) {
+                                vm.setLanguage(lang)
+                                // MainActivity 非 AppCompatActivity，Android 13 以下切换语言后需要手动
+                                // recreate() 才能让新的 attachBaseContext() 包装立即生效，而不必等下次冷启动。
+                                (context as? Activity)?.recreate()
+                            }
+                        }
+                    )
+                }
+                ToggleRow(
+                    title = stringResource(R.string.settings_glass_effect),
+                    subtitle = stringResource(R.string.settings_glass_effect_hint),
+                    checked = cfg.appearance.glassEffect,
+                    onChange = vm::setGlassEffect
+                )
+                ToggleRow(
+                    title = stringResource(R.string.settings_reduce_motion),
+                    checked = cfg.appearance.reduceMotion,
+                    onChange = vm::setReduceMotion
+                )
             } }
 
+            // ============ 悬浮窗 ============
             item { Section(stringResource(R.string.settings_section_floating)) {
-                SwitchRow(
-                    label = stringResource(R.string.settings_floating_enabled),
-                    hint = stringResource(R.string.settings_floating_enabled_hint),
+                ToggleRow(
+                    title = stringResource(R.string.settings_floating_enabled),
+                    subtitle = stringResource(R.string.settings_floating_enabled_hint),
                     checked = cfg.floatingWindow.enabled,
                     onChange = vm::setFloatingEnabled
                 )
-                OpacitySlider(
-                    value = cfg.floatingWindow.opacity.takeIf { it > 0f } ?: 0.85f,
-                    onChange = vm::setFloatingOpacity
-                )
-                FloatingSizePicker(cfg.floatingWindow.size, vm::setFloatingSize)
-                FloatingIconRow(
-                    hasCustom = cfg.floatingWindow.customIconPath.isNotBlank(),
-                    onPick = { iconPickerLauncher.launch(arrayOf("image/*")) },
-                    onReset = { vm.setFloatingIcon(null) }
-                )
-                SwitchRow(
-                    label = stringResource(R.string.settings_waveform_enabled),
-                    hint = stringResource(R.string.settings_waveform_enabled_hint),
+                val opacity = cfg.floatingWindow.opacity.takeIf { it > 0f } ?: 0.85f
+                StackedRow(stringResource(R.string.settings_floating_opacity), value = "%.0f%%".format(opacity * 100)) {
+                    // 不设 steps：与波形透明度一致的无级滑动
+                    GlassSlider(value = opacity, onValueChange = vm::setFloatingOpacity, valueRange = 0.2f..1f)
+                }
+                StackedRow(stringResource(R.string.settings_floating_size)) {
+                    Segmented(
+                        options = listOf(
+                            FloatingSize.SMALL to stringResource(R.string.settings_floating_size_small),
+                            FloatingSize.STANDARD to stringResource(R.string.settings_floating_size_standard),
+                            FloatingSize.LARGE to stringResource(R.string.settings_floating_size_large)
+                        ),
+                        selected = if (cfg.floatingWindow.size == FloatingSize.UNRECOGNIZED) FloatingSize.STANDARD else cfg.floatingWindow.size,
+                        onSelect = vm::setFloatingSize
+                    )
+                }
+                SettingRow(
+                    title = stringResource(R.string.settings_floating_icon),
+                    subtitle = stringResource(R.string.settings_floating_icon_hint)
+                ) {
+                    if (cfg.floatingWindow.customIconPath.isNotBlank()) {
+                        SoftButton(stringResource(R.string.settings_floating_icon_reset), { vm.setFloatingIcon(null) }, height = 32.dp)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    SoftButton(stringResource(R.string.settings_floating_icon_pick), { iconPickerLauncher.launch(arrayOf("image/*")) }, height = 32.dp)
+                }
+                ToggleRow(
+                    title = stringResource(R.string.settings_waveform_enabled),
+                    subtitle = stringResource(R.string.settings_waveform_enabled_hint),
                     checked = cfg.floatingWindow.waveformEnabled,
                     onChange = vm::setWaveformEnabled
                 )
                 if (cfg.floatingWindow.waveformEnabled) {
                     val wfOpacity = cfg.floatingWindow.waveformOpacity.takeIf { it > 0f } ?: 0.6f
-                    LabeledSlider(
-                        label = stringResource(R.string.settings_waveform_opacity),
-                        value = wfOpacity,
-                        valueRange = 0.15f..1f,
-                        display = "%.0f%%".format(wfOpacity * 100),
-                        onChange = vm::setWaveformOpacity
-                    )
+                    StackedRow(stringResource(R.string.settings_waveform_opacity), value = "%.0f%%".format(wfOpacity * 100)) {
+                        GlassSlider(value = wfOpacity, onValueChange = vm::setWaveformOpacity, valueRange = 0.15f..1f)
+                    }
                 }
-                SwitchRow(
-                    label = stringResource(R.string.settings_volume_shortcut),
-                    hint = stringResource(R.string.settings_volume_shortcut_hint),
+                ToggleRow(
+                    title = stringResource(R.string.settings_volume_shortcut),
+                    subtitle = stringResource(R.string.settings_volume_shortcut_hint),
                     checked = cfg.shortcuts.volumeKeysEnabled,
                     onChange = vm::setVolumeKeysEnabled
                 )
             } }
 
-            item { Section(stringResource(R.string.scope_title)) {
+            // ============ 音频 ============
+            item { Section(stringResource(R.string.settings_section_audio)) {
+                SettingRow(
+                    title = stringResource(R.string.ai_tts_title),
+                    subtitle = if (cfg.tts.ai.enabled) {
+                        stringResource(R.string.ai_tts_nav_enabled, providerLabel(cfg.tts.ai.provider))
+                    } else {
+                        stringResource(R.string.ai_tts_nav_disabled)
+                    },
+                    onClick = onOpenAiTts,
+                    chevron = true
+                )
                 val scopeSubtitle = if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
                     val targets = cfg.audioPolicyTargets()
                     when {
@@ -270,33 +264,34 @@ fun SettingsScreen(
                 } else {
                     stringResource(R.string.scope_none_selected)
                 }
-                NavRow(
+                SettingRow(
                     title = stringResource(R.string.scope_title),
                     subtitle = scopeSubtitle,
-                    onClick = onOpenScope
+                    onClick = onOpenScope,
+                    chevron = true
                 )
-            } }
-
-            item { Section(stringResource(R.string.settings_section_policy)) {
-                PlaybackPolicyPicker(cfg.playbackPolicy, vm::setPolicy)
-            } }
-
-            item { Section(stringResource(R.string.settings_section_audio_monitor)) {
-                SwitchRow(
-                    label = stringResource(R.string.settings_audio_monitor_enabled),
-                    hint = stringResource(R.string.settings_audio_monitor_enabled_hint),
+                StackedRow(stringResource(R.string.settings_section_policy), subtitle = stringResource(R.string.settings_policy_hint)) {
+                    Segmented(
+                        options = listOf(
+                            PlaybackPolicy.LOOP to stringResource(R.string.library_policy_loop),
+                            PlaybackPolicy.SILENCE to stringResource(R.string.library_policy_silence),
+                            PlaybackPolicy.REAL_MIC to stringResource(R.string.policy_real_short)
+                        ),
+                        selected = if (cfg.playbackPolicy == PlaybackPolicy.UNRECOGNIZED) PlaybackPolicy.LOOP else cfg.playbackPolicy,
+                        onSelect = vm::setPolicy
+                    )
+                }
+                ToggleRow(
+                    title = stringResource(R.string.settings_audio_monitor_enabled),
+                    subtitle = stringResource(R.string.settings_audio_monitor_enabled_hint),
                     checked = cfg.audioMonitor.enabled,
                     onChange = vm::setAudioMonitorEnabled
                 )
                 if (cfg.audioMonitor.enabled) {
                     val monVol = cfg.audioMonitor.volume.takeIf { it > 0f } ?: 1.0f
-                    LabeledSlider(
-                        label = stringResource(R.string.settings_audio_monitor_volume),
-                        value = monVol,
-                        valueRange = 0f..1f,
-                        display = "%.0f%%".format(monVol * 100),
-                        onChange = vm::setAudioMonitorVolume
-                    )
+                    StackedRow(stringResource(R.string.settings_audio_monitor_volume), value = "%.0f%%".format(monVol * 100)) {
+                        GlassSlider(value = monVol, onValueChange = vm::setAudioMonitorVolume)
+                    }
                 }
             } }
 
@@ -308,120 +303,127 @@ fun SettingsScreen(
                 )
             }
 
+            // ============ 注入方式 ============
+            item { Section(stringResource(R.string.backend_title)) {
+                val canChange = !runtimeState.enabled &&
+                    policyStatus.phase !in listOf(PolicyPhase.STARTING, PolicyPhase.ACTIVE, PolicyPhase.STOPPING)
+                listOf(
+                    InjectionBackend.LSPOSED to stringResource(R.string.backend_lsposed),
+                    InjectionBackend.AUDIO_POLICY to stringResource(R.string.backend_audio_policy)
+                ).forEach { (backend, label) ->
+                    PolicyOption(label, cfg.injectionBackend == backend, enabled = canChange) { vm.setBackend(backend) }
+                }
+                Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(R.string.backend_switch_hint), fontSize = 12.sp, color = t.ink3, lineHeight = 17.sp)
+                    if (cfg.injectionBackend == InjectionBackend.AUDIO_POLICY) {
+                        Text(stringResource(R.string.backend_policy_hint), fontSize = 12.sp, color = t.ink3, lineHeight = 17.sp)
+                        Text(
+                            policyStatus.label(context), fontSize = 13.sp,
+                            color = if (policyStatus.phase == PolicyPhase.ERROR) t.err else t.ink2
+                        )
+                        if (runtimeState.enabled && policyStatus.phase == PolicyPhase.ERROR) {
+                            SoftButton(stringResource(R.string.backend_retry), vm::retryAudioPolicy, textColor = t.primaryInk)
+                        }
+                    }
+                }
+            } }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                item { Section(stringResource(R.string.settings_section_tile)) {
+                    SettingRow(
+                        title = stringResource(R.string.settings_tile_add),
+                        subtitle = stringResource(R.string.settings_tile_add_hint),
+                        onClick = onAddTile,
+                        chevron = true
+                    )
+                } }
+            }
+
             item { Section(stringResource(R.string.settings_section_compat)) {
-                SwitchRow(
-                    label = stringResource(R.string.settings_visibility_compat),
-                    hint = stringResource(R.string.settings_visibility_compat_hint),
+                ToggleRow(
+                    title = stringResource(R.string.settings_visibility_compat),
+                    subtitle = stringResource(R.string.settings_visibility_compat_hint),
                     checked = visCompat,
                     onChange = vm::setVisibilityCompat
                 )
             } }
 
             item { Section(stringResource(R.string.settings_section_experimental)) {
-                SwitchRow(
-                    label = stringResource(R.string.settings_experimental_unlock),
-                    hint = stringResource(R.string.settings_experimental_unlock_hint),
+                ToggleRow(
+                    title = stringResource(R.string.settings_experimental_unlock),
+                    subtitle = stringResource(R.string.settings_experimental_unlock_hint),
                     checked = cfg.experimental.unlocked,
                     onChange = vm::setExperimentalUnlocked
                 )
                 if (cfg.experimental.unlocked) {
-                    SwitchRow(stringResource(R.string.settings_exp_stress),
-                        checked = cfg.experimental.stressTest, onChange = vm::setStressTest)
-                    SwitchRow(stringResource(R.string.settings_exp_high_gain),
-                        checked = cfg.experimental.highGain, onChange = vm::setHighGain)
-                    SwitchRow(stringResource(R.string.settings_exp_noise),
-                        checked = cfg.experimental.noiseSim, onChange = vm::setNoiseSim)
-                    SwitchRow(
-                        label = stringResource(R.string.settings_exp_limiter),
-                        hint = stringResource(R.string.settings_exp_limiter_hint),
+                    ToggleRow(stringResource(R.string.settings_exp_stress), checked = cfg.experimental.stressTest, onChange = vm::setStressTest)
+                    ToggleRow(stringResource(R.string.settings_exp_high_gain), checked = cfg.experimental.highGain, onChange = vm::setHighGain)
+                    ToggleRow(stringResource(R.string.settings_exp_noise), checked = cfg.experimental.noiseSim, onChange = vm::setNoiseSim)
+                    ToggleRow(
+                        title = stringResource(R.string.settings_exp_limiter),
+                        subtitle = stringResource(R.string.settings_exp_limiter_hint),
                         checked = cfg.experimental.limiterEnabled,
                         onChange = vm::setLimiter
                     )
-                    SwitchRow(
-                        label = stringResource(R.string.settings_exp_reverb),
-                        hint = stringResource(R.string.settings_exp_reverb_hint),
+                    ToggleRow(
+                        title = stringResource(R.string.settings_exp_reverb),
+                        subtitle = stringResource(R.string.settings_exp_reverb_hint),
                         checked = cfg.experimental.reverbEnabled,
                         onChange = vm::setReverbEnabled
                     )
                     if (cfg.experimental.reverbEnabled) {
                         val amount = cfg.experimental.reverbAmount.takeIf { it > 0f } ?: 0.5f
-                        LabeledSlider(
-                            label = stringResource(R.string.settings_exp_reverb_amount),
-                            value = amount,
-                            valueRange = 0f..1f,
-                            display = "%.0f%%".format(amount * 100),
-                            onChange = vm::setReverbAmount
-                        )
+                        StackedRow(stringResource(R.string.settings_exp_reverb_amount), value = "%.0f%%".format(amount * 100)) {
+                            GlassSlider(value = amount, onValueChange = vm::setReverbAmount)
+                        }
                     }
-                    SwitchRow(
-                        label = stringResource(R.string.settings_exp_speed),
-                        hint = stringResource(R.string.settings_exp_speed_hint),
+                    ToggleRow(
+                        title = stringResource(R.string.settings_exp_speed),
+                        subtitle = stringResource(R.string.settings_exp_speed_hint),
                         checked = cfg.experimental.speedEnabled,
                         onChange = vm::setSpeedEnabled
                     )
                     if (cfg.experimental.speedEnabled) {
                         val factor = cfg.experimental.speedFactor.takeIf { it > 0f } ?: 1f
-                        LabeledSlider(
-                            label = stringResource(R.string.settings_exp_speed_factor),
-                            value = factor,
-                            valueRange = 0.5f..2.0f,
-                            display = "%.2fx".format(factor),
-                            onChange = vm::setSpeedFactor
-                        )
+                        StackedRow(stringResource(R.string.settings_exp_speed_factor), value = "%.2fx".format(factor)) {
+                            GlassSlider(value = factor, onValueChange = vm::setSpeedFactor, valueRange = 0.5f..2.0f)
+                        }
                     }
                 }
             } }
 
-            item { Section(stringResource(R.string.settings_section_ai_tts)) {
-                NavRow(
-                    title = stringResource(R.string.ai_tts_title),
-                    subtitle = if (cfg.tts.ai.enabled) {
-                        stringResource(R.string.ai_tts_nav_enabled, providerLabel(cfg.tts.ai.provider))
-                    } else {
-                        stringResource(R.string.ai_tts_nav_disabled)
-                    },
-                    onClick = onOpenAiTts
-                )
+            // ============ 诊断与关于 ============
+            item { Section(stringResource(R.string.settings_section_diag_about)) {
+                SettingRow(stringResource(R.string.diag_title), onClick = onOpenDiagnostic, chevron = true)
+                SettingRow(
+                    stringResource(R.string.settings_export_diag),
+                    onClick = onExportDiag,
+                    enabled = !exporting
+                ) {
+                    if (exporting) Text(stringResource(R.string.diag_exporting), fontSize = 12.sp, color = t.ink3)
+                }
+                SettingRow(stringResource(R.string.settings_about_version)) {
+                    Text("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", fontSize = 12.sp, color = t.ink3, fontFamily = MonoFamily)
+                }
+                SettingRow(stringResource(R.string.settings_about_license)) {
+                    Text("GPL-3.0", fontSize = 12.sp, color = t.ink3, fontFamily = MonoFamily)
+                }
+                SettingRow(stringResource(R.string.settings_about_repo)) {
+                    Text("lm060719/io.mo.glassmic", fontSize = 12.sp, color = t.ink3, fontFamily = MonoFamily)
+                }
             } }
-
-            item { Section(stringResource(R.string.settings_section_about)) {
-                InfoRow(
-                    label = stringResource(R.string.settings_about_version),
-                    value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                    onClick = onVersionClick
-                )
-                InfoRow(stringResource(R.string.settings_about_license), "GPL-3.0")
-                InfoRow(stringResource(R.string.settings_about_repo), "github.com/lm060719/io.mo.glassmic")
-            } }
-
-            item { Spacer(modifier = Modifier.height(24.dp)) }
         }
     }
 }
 
-// ============ 基础组件（部分供 AiTtsSettingsScreen 复用） ============
+// ============ 基础组件（AiTtsSettingsScreen / AudioBandSection 复用） ============
+
+/** 小标题 + 玻璃分组卡片。 */
 @Composable
 internal fun Section(title: String, content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp)
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainer,
-                    RoundedCornerShape(16.dp)
-                )
-                .padding(vertical = 4.dp)
-        ) { content() }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionLabel(title)
+        GroupCard(content = content)
     }
 }
 
@@ -431,108 +433,16 @@ internal fun SwitchRow(
     hint: String? = null,
     checked: Boolean,
     onChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            if (!hint.isNullOrBlank()) {
-                Text(
-                    hint, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            }
-        }
-        Switch(checked = checked, onCheckedChange = onChange)
-    }
-}
+) = ToggleRow(title = label, subtitle = hint, checked = checked, onChange = onChange)
 
 @Composable
-private fun ActionRow(label: String, busy: Boolean = false, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !busy, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (busy) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.weight(1f)
-        )
-        if (busy) Text("导出中…", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+internal fun PolicyOption(label: String, selected: Boolean, enabled: Boolean = true, onSelect: () -> Unit) {
+    SettingRow(title = label, onClick = onSelect, enabled = enabled) {
+        RadioDot(selected)
     }
 }
 
-@Composable
-private fun NavRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                subtitle, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        }
-        Text("›", style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-    }
-}
-
-private fun providerLabel(p: TtsProvider): String = when (p) {
-    TtsProvider.GEMINI -> "Gemini"
-    TtsProvider.MIMO -> "MiMo"
-    else -> "OpenAI"
-}
-
-@Composable
-private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Text(
-            value, style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
-    }
-}
-
-@Composable
-internal fun PolicyOption(label: String, selected: Boolean, onSelect: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onSelect)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(selected = selected, onClick = onSelect)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(label)
-    }
-}
-
-// ============ 可折叠下拉选择行（点击展开为悬浮菜单） ============
+/** 点击展开为悬浮菜单的选择行。 */
 @Composable
 internal fun <T> DropdownPickerRow(
     title: String,
@@ -541,55 +451,28 @@ internal fun <T> DropdownPickerRow(
     options: List<Pair<String, T>>,
     onSelect: (T) -> Unit
 ) {
+    val t = glass
     var expanded by remember { mutableStateOf(false) }
     val currentLabel = options.firstOrNull { it.second == current }?.first.orEmpty()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = true }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (!hint.isNullOrBlank()) {
-                Text(
-                    hint, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            }
-        }
+    SettingRow(title = title, subtitle = hint, onClick = { expanded = true }) {
         Box {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    currentLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(start = 4.dp)
-                )
+                Text(currentLabel, fontSize = 13.sp, color = t.ink2)
+                Icon(Icons.Rounded.UnfoldMore, null, tint = t.ink3, modifier = Modifier.padding(start = 2.dp).size(18.dp))
             }
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
                 offset = DpOffset(x = 0.dp, y = 4.dp),
-                shape = RoundedCornerShape(16.dp)
+                shape = RoundedCornerShape(18.dp),
+                containerColor = t.sheet
             ) {
                 options.forEach { (label, value) ->
                     DropdownMenuItem(
-                        text = { Text(label) },
+                        text = { Text(label, fontSize = 14.sp, color = if (value == current) t.primaryInk else t.ink) },
                         onClick = { onSelect(value); expanded = false },
                         trailingIcon = {
-                            if (value == current) {
-                                Icon(
-                                    Icons.Filled.Check, contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                            if (value == current) Icon(Icons.Rounded.Check, null, tint = t.primaryInk, modifier = Modifier.size(18.dp))
                         }
                     )
                 }
@@ -598,127 +481,8 @@ internal fun <T> DropdownPickerRow(
     }
 }
 
-// ============ 主题 ============
-@Composable
-private fun ThemePicker(current: ThemeMode, onSelect: (ThemeMode) -> Unit) {
-    DropdownPickerRow(
-        title = stringResource(R.string.settings_theme),
-        current = current,
-        options = listOf(
-            stringResource(R.string.settings_theme_follow) to ThemeMode.FOLLOW_SYSTEM,
-            stringResource(R.string.settings_theme_light) to ThemeMode.LIGHT,
-            stringResource(R.string.settings_theme_dark) to ThemeMode.DARK
-        ),
-        onSelect = onSelect
-    )
+internal fun providerLabel(p: TtsProvider): String = when (p) {
+    TtsProvider.GEMINI -> "Gemini"
+    TtsProvider.MIMO -> "MiMo"
+    else -> "OpenAI"
 }
-
-// ============ 语言 ============
-@Composable
-private fun LanguagePicker(current: AppLanguage, onSelect: (AppLanguage) -> Unit) {
-    DropdownPickerRow(
-        title = stringResource(R.string.settings_language),
-        current = current,
-        options = listOf(
-            stringResource(R.string.settings_language_follow) to AppLanguage.SYSTEM,
-            stringResource(R.string.settings_language_zh) to AppLanguage.ZH,
-            stringResource(R.string.settings_language_en) to AppLanguage.EN
-        ),
-        onSelect = onSelect
-    )
-}
-
-// ============ 默认播放策略 ============
-@Composable
-private fun PlaybackPolicyPicker(current: PlaybackPolicy, onSelect: (PlaybackPolicy) -> Unit) {
-    DropdownPickerRow(
-        title = stringResource(R.string.settings_policy_hint),
-        current = current,
-        options = listOf(
-            stringResource(R.string.library_policy_loop) to PlaybackPolicy.LOOP,
-            stringResource(R.string.library_policy_silence) to PlaybackPolicy.SILENCE,
-            stringResource(R.string.library_policy_real_mic) to PlaybackPolicy.REAL_MIC
-        ),
-        onSelect = onSelect
-    )
-}
-
-// ============ 悬浮窗不透明度 ============
-@Composable
-private fun OpacitySlider(value: Float, onChange: (Float) -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.settings_floating_opacity), modifier = Modifier.weight(1f))
-            Text("%.0f%%".format(value * 100), style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        }
-        // 不设 steps：与波形透明度一致的无级滑动
-        Slider(
-            value = value,
-            onValueChange = onChange,
-            valueRange = 0.2f..1f
-        )
-    }
-}
-
-// ============ 通用带标签滑块 ============
-@Composable
-private fun LabeledSlider(
-    label: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    display: String,
-    steps: Int = 0,
-    onChange: (Float) -> Unit
-) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, modifier = Modifier.weight(1f))
-            Text(display, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        }
-        Slider(value = value, onValueChange = onChange, valueRange = valueRange, steps = steps)
-    }
-}
-
-// ============ 悬浮球大小 ============
-@Composable
-private fun FloatingSizePicker(current: FloatingSize, onSelect: (FloatingSize) -> Unit) {
-    val effective = if (current == FloatingSize.UNRECOGNIZED) FloatingSize.STANDARD else current
-    DropdownPickerRow(
-        title = stringResource(R.string.settings_floating_size),
-        current = effective,
-        options = listOf(
-            stringResource(R.string.settings_floating_size_small) to FloatingSize.SMALL,
-            stringResource(R.string.settings_floating_size_standard) to FloatingSize.STANDARD,
-            stringResource(R.string.settings_floating_size_large) to FloatingSize.LARGE
-        ),
-        onSelect = onSelect
-    )
-}
-
-// ============ 悬浮球图标 ============
-@Composable
-private fun FloatingIconRow(hasCustom: Boolean, onPick: () -> Unit, onReset: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(stringResource(R.string.settings_floating_icon), style = MaterialTheme.typography.bodyLarge)
-            Text(
-                stringResource(R.string.settings_floating_icon_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        }
-        if (hasCustom) {
-            TextButton(onClick = onReset) { Text(stringResource(R.string.settings_floating_icon_reset)) }
-        }
-        TextButton(onClick = onPick) { Text(stringResource(R.string.settings_floating_icon_pick)) }
-    }
-}
-
-

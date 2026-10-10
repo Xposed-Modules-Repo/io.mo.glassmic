@@ -50,12 +50,15 @@ import io.mo.glassmic.ui.theme.LocalReduceMotion
  */
 object OverlayColors {
     /** 面板不透明底。基色与 GlassColors.SurfaceContainerDark 同源，留一点透明透出背景层次。 */
-    val PanelBase = GlassColors.SurfaceContainerDark.copy(alpha = 0.94f)
+    val PanelBase = Color(0xFF1E1F26).copy(alpha = 0.96f)
     /** 悬浮球底色，比面板更透一些。 */
-    val BallBase = GlassColors.SurfaceContainerDark.copy(alpha = 0.82f)
+    val BallBase = Color(0xFF282A34).copy(alpha = 0.86f)
 
-    val Accent = Color(0xFF34C759)
-    val Danger = Color(0xFFFF6B6B)
+    /** 主色，与主 App 的 GlassPrimary 一致。 */
+    val Accent = GlassColors.Primary
+    /** 录制推流中的红点。 */
+    val Live = GlassColors.Error
+    val Danger = GlassColors.Error
     val Idle = Color(0xFF9E9EA0)
 
     val OnDark = Color.White
@@ -64,19 +67,23 @@ object OverlayColors {
 
     /** 三档白色填充，取代散落各处的 0x33/0x22/0x1A FFFFFF 魔法值。 */
     val FillStrong = Color(0x33FFFFFF)
-    val Fill = Color(0x22FFFFFF)
-    val FillWeak = Color(0x14FFFFFF)
+    val Fill = Color(0x17FFFFFF)
+    val FillWeak = Color(0x12FFFFFF)
 
-    val Border = Color(0x24FFFFFF)
+    val Border = Color(0x2EFFFFFF)
+    /** 分段控件选中块（设计稿深色 segOn）。 */
+    val SegOn = Color(0x33FFFFFF)
     /** 选中行的淡色底，配合绿色 ✓ 让当前项一眼可见。 */
-    val SelectedRow = Accent.copy(alpha = 0.14f)
+    val SelectedRow = Accent.copy(alpha = 0.24f)
+    /** 选中行文字（设计稿深色 primaryInk）。 */
+    val AccentInk = Color(0xFF9CBBFF)
 }
 
 object OverlayShapes {
-    val Panel = 22.dp
-    val Card = 14.dp
-    val Pill = 12.dp
-    val Chip = 9.dp
+    val Panel = 30.dp
+    val Card = 16.dp
+    val Pill = 14.dp
+    val Chip = 12.dp
 }
 
 /**
@@ -87,7 +94,7 @@ object OverlayShapes {
  */
 val OverlayColorScheme: ColorScheme = darkColorScheme(
     primary = OverlayColors.Accent,
-    onPrimary = Color.Black,
+    onPrimary = Color.White,
     surface = OverlayColors.PanelBase,
     onSurface = OverlayColors.OnDark,
     surfaceVariant = OverlayColors.Fill,
@@ -145,7 +152,7 @@ fun PillButton(
         PillStyle.Disabled -> OverlayColors.FillWeak
     }
     val fg = when (style) {
-        PillStyle.Primary -> Color.Black
+        PillStyle.Primary -> Color.White
         PillStyle.Disabled -> OverlayColors.OnDarkFaint
         else -> OverlayColors.OnDark
     }
@@ -157,10 +164,10 @@ fun PillButton(
         maxLines = 1,
         textAlign = TextAlign.Center,
         modifier = modifier
-            .clip(RoundedCornerShape(OverlayShapes.Pill))
+            .clip(RoundedCornerShape(23.dp))
             .background(bg)
             .clickable(enabled = style != PillStyle.Disabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 9.dp)
+            .padding(horizontal = 18.dp, vertical = 13.dp)
     )
 }
 
@@ -199,15 +206,15 @@ fun SegmentedSwitch(
                 modifier = Modifier
                     .offset(x = indicatorX)
                     .width(segW)
-                    .height(30.dp)
+                    .height(36.dp)
                     .clip(RoundedCornerShape(OverlayShapes.Pill - trackPad))
-                    .background(OverlayColors.Accent)
+                    .background(OverlayColors.SegOn)
             )
-            Row(modifier = Modifier.fillMaxWidth().height(30.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().height(36.dp)) {
                 options.forEachIndexed { index, label ->
                     val selected = index == selectedIndex
                     val color by animateColorAsState(
-                        targetValue = if (selected) Color.Black else OverlayColors.OnDarkDim,
+                        targetValue = if (selected) OverlayColors.OnDark else OverlayColors.OnDarkDim,
                         animationSpec = if (reduceMotion) snap() else tween(220),
                         label = "segLabel"
                     )
@@ -222,7 +229,7 @@ fun SegmentedSwitch(
                         Text(
                             text = label,
                             color = color,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             maxLines = 1,
                             textAlign = TextAlign.Center,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal

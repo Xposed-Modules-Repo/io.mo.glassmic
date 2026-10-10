@@ -1,6 +1,7 @@
 package io.mo.glassmic.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
@@ -8,6 +9,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -30,14 +33,40 @@ val LocalGlassEnabled = compositionLocalOf { true }
 /** 当前是否降低动画——给过渡/转场用 */
 val LocalReduceMotion = compositionLocalOf { false }
 
+// 字号阶梯对齐重设计稿：30 大标题 / 20 页标题 / 15 正文 / 13 辅助 / 12 说明
 private val GlassTypography = Typography(
-    headlineLarge = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp),
-    headlineMedium = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.SemiBold),
-    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
-    titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium),
-    bodyLarge = TextStyle(fontSize = 16.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp),
-    labelLarge = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    headlineLarge = TextStyle(fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp),
+    headlineMedium = TextStyle(fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
+    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 17.sp),
+    labelLarge = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 13.sp),
+    labelSmall = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+)
+
+/** 让残留的 Material 组件（对话框、下拉菜单、输入框）也落在新 token 上。 */
+private fun GlassTokens.toColorScheme(base: ColorScheme): ColorScheme = base.copy(
+    primary = primary,
+    onPrimary = Color.White,
+    primaryContainer = primarySoft,
+    onPrimaryContainer = primaryInk,
+    error = err,
+    background = bgBase,
+    onBackground = ink,
+    surface = bgBase,
+    onSurface = ink,
+    onSurfaceVariant = ink2,
+    surfaceVariant = fill,
+    surfaceContainerLowest = sheet,
+    surfaceContainerLow = sheet,
+    surfaceContainer = sheet,
+    surfaceContainerHigh = sheet,
+    surfaceContainerHighest = sheet,
+    outline = dash,
+    outlineVariant = divider
 )
 
 data class GlassThemeState(
@@ -70,12 +99,14 @@ fun GlassMicTheme(content: @Composable () -> Unit) {
         ThemeMode.DARK -> true
         else -> isSystemInDarkTheme()
     }
-    val scheme = if (isDark) GlassDarkScheme else GlassLightScheme
+    val tokens = remember(isDark, state.glassEffect) { glassTokens(isDark, state.glassEffect) }
+    val scheme = remember(isDark, tokens) { tokens.toColorScheme(if (isDark) GlassDarkScheme else GlassLightScheme) }
 
     MaterialTheme(colorScheme = scheme, typography = GlassTypography) {
         CompositionLocalProvider(
             LocalGlassEnabled provides state.glassEffect,
-            LocalReduceMotion provides state.reduceMotion
+            LocalReduceMotion provides state.reduceMotion,
+            LocalGlassTokens provides tokens
         ) { content() }
     }
 }

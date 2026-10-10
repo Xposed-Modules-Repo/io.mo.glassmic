@@ -59,8 +59,24 @@ class SettingsViewModel @Inject constructor(
     private val visibilityCompatRepo: VisibilityCompatRepository,
     private val audioPolicy: AudioPolicyController,
     private val runtime: RuntimeStateHolder,
+    private val bundler: io.mo.glassmic.data.diag.DiagnosticBundler,
     hookStatusRepo: HookStatusRepository
 ) : ViewModel() {
+
+    private val _exporting = MutableStateFlow(false)
+    val exporting: StateFlow<Boolean> = _exporting.asStateFlow()
+
+    /** 打包诊断数据，成功后把可分享的 Uri 交给调用方弹出分享面板。 */
+    fun exportDiagnostic(onReady: (Uri) -> Unit, onError: (Throwable) -> Unit) {
+        if (_exporting.value) return
+        _exporting.value = true
+        viewModelScope.launch {
+            runCatching { bundler.export() }
+                .onSuccess { onReady(bundler.shareUri(it)) }
+                .onFailure(onError)
+            _exporting.value = false
+        }
+    }
 
     val policyStatus = audioPolicy.status
     val runtimeState = runtime.flow

@@ -14,14 +14,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** 两步引导：免责声明 → 权限清单（一页列出全部权限，逐项去授权）。 */
 enum class OnboardingStep {
     Disclaimer,
-    Root,
-    Notification,
-    Overlay,
-    FileAccess,
-    ForegroundService,
-    SafeMode,
+    Permissions,
     Done
 }
 
@@ -46,16 +42,10 @@ class OnboardingViewModel @Inject constructor(
     }
 
     fun next() {
-        val current = _ui.value
         _ui.update {
-            it.copy(step = when (current.step) {
-                OnboardingStep.Disclaimer -> OnboardingStep.Root
-                OnboardingStep.Root -> OnboardingStep.Notification
-                OnboardingStep.Notification -> OnboardingStep.Overlay
-                OnboardingStep.Overlay -> OnboardingStep.FileAccess
-                OnboardingStep.FileAccess -> OnboardingStep.ForegroundService
-                OnboardingStep.ForegroundService -> OnboardingStep.SafeMode
-                OnboardingStep.SafeMode -> OnboardingStep.Done
+            it.copy(step = when (it.step) {
+                OnboardingStep.Disclaimer -> if (it.disclaimerAgreed) OnboardingStep.Permissions else OnboardingStep.Disclaimer
+                OnboardingStep.Permissions -> if (it.permissions.requiredGranted) OnboardingStep.Done else OnboardingStep.Permissions
                 OnboardingStep.Done -> OnboardingStep.Done
             })
         }
@@ -69,19 +59,6 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    fun currentStepStatus(): PermissionStatus {
-        val s = _ui.value
-        return when (s.step) {
-            OnboardingStep.Root -> s.permissions.root
-            OnboardingStep.Notification -> s.permissions.notification
-            OnboardingStep.Overlay -> s.permissions.overlay
-            OnboardingStep.FileAccess -> s.permissions.fileAccess
-            OnboardingStep.ForegroundService -> s.permissions.foregroundService
-            OnboardingStep.SafeMode -> if (s.permissions.safeModeOk) PermissionStatus.GRANTED else PermissionStatus.DENIED
-            else -> PermissionStatus.GRANTED
-        }
-    }
-
     fun finish(onComplete: () -> Unit) {
         viewModelScope.launch {
             configStore.update { b -> b.setOnboardingCompleted(true) }
@@ -89,3 +66,7 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 }
+
+/** 必需权限：Root、通知、文件访问、前台服务。悬浮窗为可选，未授权时回退到通知 + 主界面控制。 */
+val PermissionState.requiredGranted: Boolean
+    get() = listOf(root, notification, fileAccess, foregroundService).all { it == PermissionStatus.GRANTED }

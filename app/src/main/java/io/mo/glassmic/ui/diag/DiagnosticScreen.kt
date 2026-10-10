@@ -1,12 +1,12 @@
 package io.mo.glassmic.ui.diag
 
 import android.content.Intent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,48 +20,44 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarHost
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import io.mo.glassmic.ui.common.BackHeader
+import io.mo.glassmic.ui.common.GlassCard
+import io.mo.glassmic.ui.common.GlassIconButton
+import io.mo.glassmic.ui.common.GlassPage
+import io.mo.glassmic.ui.common.GroupCard
+import io.mo.glassmic.ui.common.MonoFamily
+import io.mo.glassmic.ui.common.OutlineGlassButton
+import io.mo.glassmic.ui.common.PrimaryButton
+import io.mo.glassmic.ui.common.SectionLabel
+import io.mo.glassmic.ui.common.Segmented
+import io.mo.glassmic.ui.common.SettingRow
+import io.mo.glassmic.ui.common.SoftButton
+import io.mo.glassmic.ui.common.StackedRow
+import io.mo.glassmic.ui.common.StatusKind
+import io.mo.glassmic.ui.common.StatusPill
+import io.mo.glassmic.ui.common.glass
 import io.mo.glassmic.R
 import io.mo.glassmic.core.model.SourceType
 import io.mo.glassmic.data.diag.AudioPipelineProbe
@@ -74,7 +70,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiagnosticScreen(
     onBack: () -> Unit,
@@ -105,31 +100,18 @@ fun DiagnosticScreen(
         state.exportError?.let { snackbar.showSnackbar(it); vm.consumeExport() }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.diag_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = vm::refreshAll) {
-                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                    }
-                }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbar) { Snackbar(snackbarData = it) } }
-    ) { inner ->
+    val t = glass
+    GlassPage(snackbar) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                BackHeader(stringResource(R.string.diag_title), onBack) {
+                    GlassIconButton(Icons.Rounded.Refresh, stringResource(R.string.diag_refresh), vm::refreshAll, size = 40.dp)
+                }
+            }
             // ============ 1. 全链路健康自检 ============
             item {
                 DiagSection(stringResource(R.string.diag_section_health)) {
@@ -140,9 +122,9 @@ fun DiagnosticScreen(
                         HookActivity.NEVER_PINGED -> "未检测到注入"
                     }
                     val hookColor = when (state.hook.activity) {
-                        HookActivity.ACTIVE -> Color(0xFF34C759)
-                        HookActivity.STALE -> Color(0xFFFFB020)
-                        HookActivity.NEVER_PINGED -> Color(0xFFE5484D)
+                        HookActivity.ACTIVE -> t.ok
+                        HookActivity.STALE -> t.warn
+                        HookActivity.NEVER_PINGED -> t.err
                     }
                     DiagRow(
                         label = stringResource(R.string.diag_health_lsposed),
@@ -161,7 +143,7 @@ fun DiagnosticScreen(
                         !state.runtimeServiceEnabled -> "前台服务未启动"
                         else -> "正常运行中"
                     }
-                    val serviceColor = if (serviceOk) Color(0xFF34C759) else Color(0xFFE5484D)
+                    val serviceColor = if (serviceOk) t.ok else t.err
                     DiagRow(
                         label = stringResource(R.string.diag_health_service),
                         value = serviceText,
@@ -180,14 +162,14 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = stringResource(R.string.diag_health_scope),
                         value = scopeText,
-                        valueColor = Color(0xFF34C759),
-                        statusDotColor = Color(0xFF34C759),
+                        valueColor = t.ok,
+                        statusDotColor = t.ok,
                         subtitle = "若目标 App 没声音，请确认包名在生效清单内"
                     )
 
                     // 音频源就绪
                     val hasAudio = state.config.currentAudioId.isNotBlank() || state.audioInfo.displayName != "—"
-                    val sourceColor = if (hasAudio) Color(0xFF34C759) else Color(0xFFFFB020)
+                    val sourceColor = if (hasAudio) t.ok else t.warn
                     DiagRow(
                         label = stringResource(R.string.diag_health_source),
                         value = state.audioInfo.displayName,
@@ -196,6 +178,19 @@ fun DiagnosticScreen(
                         subtitle = if (hasAudio) "音源类型: ${state.audioInfo.sourceType.name}" else "未选定音频，建议前往音频库导入"
                     )
                 }
+            }
+
+            // ============ 5. 音频推流自检与试听 ============
+            item {
+                SectionLabel(stringResource(R.string.diag_section_probe))
+                Spacer(Modifier.height(8.dp))
+                ProbeCard(
+                    probing = state.probing,
+                    result = state.probeResult,
+                    isPlaying = state.auditionPlaying,
+                    onRun = vm::runPipelineProbe,
+                    onToggleAudition = vm::toggleAudition
+                )
             }
 
             // ============ 2. 设备与运行环境 ============
@@ -209,7 +204,7 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = stringResource(R.string.diag_device_abi),
                         value = "arm64-v8a (64位)",
-                        valueColor = Color(0xFF34C759),
+                        valueColor = t.ok,
                         subtitle = "设备支持: ${state.deviceEnv.abiList.take(32)}…"
                     )
                     val pssMb = state.deviceEnv.memoryPssKb / 1024.0
@@ -224,7 +219,7 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = stringResource(R.string.diag_device_visibility),
                         value = if (state.deviceEnv.visibilityCompat) "已开启 (兼容高版本ROM)" else "关闭 (默认)",
-                        valueColor = if (state.deviceEnv.visibilityCompat) Color(0xFF34C759) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        valueColor = if (state.deviceEnv.visibilityCompat) t.ok else t.ink3,
                         subtitle = "若模块无效果，可在设置页开启此开关并授权 Root"
                     )
                 }
@@ -236,19 +231,19 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = stringResource(R.string.diag_hook_aaudio),
                         value = "AAudioStream_read",
-                        valueColor = Color(0xFF34C759),
+                        valueColor = t.ok,
                         subtitle = "ShadowHook NDK 原生层拦截"
                     )
                     DiagRow(
                         label = stringResource(R.string.diag_hook_opensl),
                         value = "slCreateEngine / BQ",
-                        valueColor = Color(0xFF34C759),
+                        valueColor = t.ok,
                         subtitle = "OpenSL ES 录音缓冲队列 Hook"
                     )
                     DiagRow(
                         label = stringResource(R.string.diag_hook_audiorecord_native),
                         value = "AudioRecord::read",
-                        valueColor = Color(0xFF34C759),
+                        valueColor = t.ok,
                         subtitle = "libaudioclient.so C++ 实例拦截"
                     )
                 }
@@ -260,7 +255,7 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = stringResource(R.string.diag_audio_source_type),
                         value = state.audioInfo.sourceType.name,
-                        valueColor = Color(0xFF007AFF)
+                        valueColor = t.primaryInk
                     )
                     DiagRow(
                         label = stringResource(R.string.diag_audio_name),
@@ -288,33 +283,6 @@ fun DiagnosticScreen(
                     DiagRow(
                         label = "播放策略",
                         value = policyName
-                    )
-                }
-            }
-
-            // ============ 5. 音频推流自检与试听 ============
-            item {
-                DiagSection(stringResource(R.string.diag_section_probe)) {
-                    DiagButtonRow(
-                        label = stringResource(R.string.diag_probe_run),
-                        busy = state.probing,
-                        busyText = "正在拉取 PCM 数据…",
-                        onClick = vm::runPipelineProbe
-                    )
-
-                    state.probeResult?.let { r ->
-                        ProbeResultCard(
-                            result = r,
-                            isPlaying = state.auditionPlaying,
-                            onToggleAudition = vm::toggleAudition
-                        )
-                    }
-
-                    Text(
-                        stringResource(R.string.diag_probe_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -352,9 +320,9 @@ fun DiagnosticScreen(
                     if (state.decisions.isEmpty()) {
                         Text(
                             stringResource(R.string.diag_decisions_empty),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                            style = TextStyle(fontSize = 12.sp),
+                            color = t.ink3,
+                            modifier = Modifier.padding(vertical = 12.dp)
                         )
                     } else {
                         state.decisions.take(20).forEach { d ->
@@ -363,9 +331,9 @@ fun DiagnosticScreen(
                     }
                     Text(
                         stringResource(R.string.diag_decisions_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        style = TextStyle(fontSize = 12.sp),
+                        color = t.ink3,
+                        modifier = Modifier.padding(vertical = 8.dp)
                     )
                 }
             }
@@ -397,50 +365,39 @@ fun DiagnosticScreen(
                         )
                         Text(
                             stringResource(R.string.diag_tap_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            style = TextStyle(fontSize = 12.sp),
+                            color = t.ink3,
+                            modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(32.dp)) }
+            item {
+                OutlineGlassButton(
+                    text = if (state.exporting) stringResource(R.string.diag_exporting) else stringResource(R.string.settings_export_diag),
+                    onClick = vm::exportDiagnostic,
+                    enabled = !state.exporting,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
         }
     }
 }
 
-// ============ 对齐统一的子组件 ============
+// ============ 子组件 ============
 
 @Composable
 private fun DiagSection(title: String, content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp)
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainer,
-                    RoundedCornerShape(16.dp)
-                )
-                .padding(vertical = 4.dp)
-        ) { content() }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionLabel(title)
+        GroupCard(content = content)
     }
 }
 
 /**
- * 左右严格对齐的基础信息行：
- * - 左侧：标题 + 可选状态圆点 + 可选副标题（严格从 x=16dp 起始）
- * - 右侧：数值（严格在右边界对齐）
+ * 诊断信息行：左侧标题 + 说明；右侧为数值。
+ * 带 [statusDotColor] 的行（健康自检）把数值渲染成状态胶囊。
  */
 @Composable
 private fun DiagRow(
@@ -448,159 +405,149 @@ private fun DiagRow(
     value: String,
     subtitle: String? = null,
     statusDotColor: Color? = null,
-    valueColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+    valueColor: Color = Color.Unspecified,
     isMonoValue: Boolean = false,
     onClick: (() -> Unit)? = null
 ) {
+    val t = glass
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(end = 12.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (statusDotColor != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(statusDotColor, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Normal
-                )
-            }
-            if (!subtitle.isNullOrBlank()) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(
-                        start = if (statusDotColor != null) 16.dp else 0.dp,
-                        top = 2.dp
-                    )
-                )
-            }
+        Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, fontSize = 15.sp)
+            if (!subtitle.isNullOrBlank()) Text(subtitle, fontSize = 12.sp, lineHeight = 17.sp, color = t.ink3)
         }
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = valueColor,
-            fontFamily = if (isMonoValue) FontFamily.Monospace else null,
-            textAlign = TextAlign.End,
-            modifier = Modifier.wrapContentWidth(Alignment.End)
-        )
+        if (statusDotColor != null) {
+            StatusPill(
+                value,
+                when (statusDotColor) {
+                    t.ok -> StatusKind.Ok
+                    t.err -> StatusKind.Error
+                    else -> StatusKind.Warn
+                }
+            )
+        } else {
+            Text(
+                value,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (valueColor == Color.Unspecified) t.ink else valueColor,
+                fontFamily = if (isMonoValue) MonoFamily else null,
+                textAlign = TextAlign.End,
+                modifier = Modifier.wrapContentWidth(Alignment.End)
+            )
+        }
     }
 }
 
+/** 推流自检卡片：说明 + 32 根电平柱 + 主按钮（自检 → 试听）。 */
 @Composable
-private fun ProbeResultCard(
-    result: AudioPipelineProbe.Result,
+private fun ProbeCard(
+    probing: Boolean,
+    result: AudioPipelineProbe.Result?,
     isPlaying: Boolean,
+    onRun: () -> Unit,
     onToggleAudition: () -> Unit
 ) {
-    val statusColor = if (result.ok && result.rms >= 1.0) Color(0xFF34C759)
-    else if (result.bytesRead > 0) Color(0xFFFFB020)
-    else Color(0xFFE5484D)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(8.dp).background(statusColor, CircleShape))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                result.message,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // RMS 振幅进度条
-        val rmsNorm = (result.rms / 10000.0).toFloat().coerceIn(0f, 1f)
-        LinearProgressIndicator(
-            progress = { rmsNorm },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = statusColor,
-            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "读取: ${result.bytesRead} 字节  ·  耗时: ${result.durationMs}ms",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-            Text(
-                "RMS: %.1f".format(result.rms),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = statusColor
-            )
-        }
-
-        if (result.pcmData != null && result.pcmData.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = onToggleAudition,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isPlaying) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                ),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
+    val t = glass
+    val levels = remember(result) { result?.pcmData?.let { pcmLevels(it, 32) } }
+    val statusColor = when {
+        result == null -> t.ink3
+        result.ok && result.rms >= 1.0 -> t.ok
+        result.bytesRead > 0 -> t.warn
+        else -> t.err
+    }
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.diag_probe_hint), fontSize = 13.sp, lineHeight = 20.sp, color = t.ink2)
+            Row(
+                Modifier.fillMaxWidth().height(36.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
+                repeat(32) { i ->
+                    val lv = levels?.getOrNull(i)
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(if (lv == null) 4.dp else (6 + 30 * lv).dp)
+                            .background(if (lv == null) t.fill else t.primary, RoundedCornerShape(2.dp))
+                    )
+                }
+            }
+            if (result != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(statusColor, CircleShape))
+                    Spacer(Modifier.width(8.dp))
+                    Text(result.message, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text("RMS %.1f".format(result.rms), fontSize = 12.sp, color = statusColor, fontFamily = MonoFamily)
+                }
                 Text(
-                    if (isPlaying) stringResource(R.string.diag_probe_audition_stop) else stringResource(R.string.diag_probe_audition),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
+                    stringResource(R.string.diag_probe_detail, result.bytesRead, result.durationMs),
+                    fontSize = 12.sp, color = t.ink3, fontFamily = MonoFamily
+                )
+            }
+            val canAudition = result?.pcmData?.isNotEmpty() == true
+            PrimaryButton(
+                text = when {
+                    probing -> stringResource(R.string.diag_probe_running)
+                    canAudition && isPlaying -> stringResource(R.string.diag_probe_audition_stop)
+                    canAudition -> stringResource(R.string.diag_probe_audition)
+                    else -> stringResource(R.string.diag_probe_run)
+                },
+                onClick = if (canAudition) onToggleAudition else onRun,
+                enabled = !probing,
+                height = 46.dp,
+                color = if (canAudition && isPlaying) t.err else Color.Unspecified,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (canAudition && !probing) {
+                SoftButton(
+                    stringResource(R.string.diag_probe_rerun),
+                    onRun,
+                    height = 40.dp,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
     }
+}
+
+/** 把 16 位小端 PCM 切成 [bars] 段，取每段 RMS 并归一化到 0..1。 */
+private fun pcmLevels(pcm: ByteArray, bars: Int): List<Float> {
+    val samples = pcm.size / 2
+    if (samples < bars) return List(bars) { 0f }
+    val per = samples / bars
+    val rms = (0 until bars).map { b ->
+        var sum = 0.0
+        for (i in 0 until per) {
+            val idx = (b * per + i) * 2
+            val v = ((pcm[idx + 1].toInt() shl 8) or (pcm[idx].toInt() and 0xFF)).toShort().toDouble()
+            sum += v * v
+        }
+        kotlin.math.sqrt(sum / per)
+    }
+    val max = rms.maxOrNull()?.takeIf { it > 0 } ?: return List(bars) { 0f }
+    return rms.map { (it / max).toFloat().coerceIn(0f, 1f) }
 }
 
 @Composable
 private fun DecisionItemRow(record: DecisionRecord) {
+    val t = glass
     val tagColor = when (record.result) {
-        SourceType.FILE, SourceType.TTS -> Color(0xFF34C759)
-        SourceType.SILENCE -> Color(0xFF007AFF)
-        SourceType.REAL_MIC -> Color(0xFF8E8E93)
+        SourceType.FILE, SourceType.TTS -> t.ok
+        SourceType.SILENCE -> t.primaryInk
+        SourceType.REAL_MIC -> t.ink3
     }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(
@@ -611,9 +558,9 @@ private fun DecisionItemRow(record: DecisionRecord) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     record.callerPackage,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = TextStyle(fontSize = 14.sp),
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = t.ink
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Box(
@@ -624,7 +571,7 @@ private fun DecisionItemRow(record: DecisionRecord) {
                 ) {
                     Text(
                         record.result.name,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = TextStyle(fontSize = 11.sp),
                         color = tagColor,
                         fontWeight = FontWeight.Bold
                     )
@@ -632,16 +579,16 @@ private fun DecisionItemRow(record: DecisionRecord) {
             }
             Text(
                 record.reasonDescription,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                style = TextStyle(fontSize = 12.sp),
+                color = t.ink3,
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
         Text(
             formatTimeOnly(record.timestamp),
-            style = MaterialTheme.typography.labelSmall,
+            style = TextStyle(fontSize = 11.sp),
             fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            color = t.ink3
         )
     }
 }
@@ -653,92 +600,25 @@ private fun DiagButtonRow(
     busyText: String = "处理中…",
     onClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !busy, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = if (busy) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.weight(1f)
-        )
-        if (busy) {
-            Text(
-                busyText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-            )
-        }
+    val t = glass
+    SettingRow(title = label, onClick = onClick, enabled = !busy, titleColor = t.primaryInk) {
+        if (busy) Text(busyText, fontSize = 12.sp, color = t.ink3)
     }
 }
 
 @Composable
 private fun LogLevelPickerRow(current: LogLevel, onSelect: (LogLevel) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val options = listOf(
-        stringResource(R.string.settings_log_off) to LogLevel.OFF,
-        stringResource(R.string.settings_log_basic) to LogLevel.BASIC,
-        stringResource(R.string.settings_log_verbose) to LogLevel.VERBOSE,
-        stringResource(R.string.settings_log_debug) to LogLevel.DEBUG
-    )
-    val currentLabel = options.firstOrNull { it.second == current }?.first ?: ""
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = true }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            stringResource(R.string.settings_log_level),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
+    StackedRow(stringResource(R.string.settings_log_level)) {
+        Segmented(
+            options = listOf(
+                LogLevel.OFF to stringResource(R.string.settings_log_off),
+                LogLevel.BASIC to stringResource(R.string.settings_log_basic),
+                LogLevel.VERBOSE to stringResource(R.string.settings_log_verbose),
+                LogLevel.DEBUG to stringResource(R.string.settings_log_debug)
+            ),
+            selected = if (current == LogLevel.UNRECOGNIZED) LogLevel.BASIC else current,
+            onSelect = onSelect
         )
-        Box {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    currentLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(start = 4.dp)
-                )
-            }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                offset = DpOffset(x = 0.dp, y = 4.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                options.forEach { (label, value) ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
-                        onClick = { onSelect(value); expanded = false },
-                        trailingIcon = {
-                            if (value == current) {
-                                Icon(
-                                    Icons.Filled.Check, contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    )
-                }
-            }
-        }
     }
 }
 

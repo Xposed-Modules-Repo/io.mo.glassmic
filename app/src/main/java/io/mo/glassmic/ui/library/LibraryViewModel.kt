@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.mo.glassmic.core.model.PlaybackPolicy
 import io.mo.glassmic.data.audio.AudioFileResolver
 import io.mo.glassmic.data.audio.AudioImportRepository
+import io.mo.glassmic.data.audio.PlaybackController
 import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.db.AudioClipEntity
 import io.mo.glassmic.data.db.AudioDao
@@ -16,6 +17,7 @@ import io.mo.glassmic.log.GlassLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -38,6 +40,7 @@ data class LibraryUiState(
 class LibraryViewModel @Inject constructor(
     private val importer: AudioImportRepository,
     private val resolver: AudioFileResolver,
+    private val playback: PlaybackController,
     configStore: ConfigStore,
     audioDao: AudioDao
 ) : ViewModel() {
@@ -74,6 +77,22 @@ class LibraryViewModel @Inject constructor(
             errorMessage = err
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LibraryUiState())
+
+    /** 全部片段数，标题右侧的统计用。 */
+    val totalClips: StateFlow<Int> = audioDao.observeAllClips().map { it.size }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** 一次性提示（设为当前音源成功等），与错误分开。 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+    fun consumeNotice() { _notice.value = null }
+
+    /** 设为当前虚拟麦克风音源。 */
+    fun setCurrent(clip: AudioClipEntity, okMessage: String, failMessage: String) {
+        viewModelScope.launch {
+            _notice.value = if (playback.setCurrentClip(clip.id)) okMessage else failMessage
+        }
+    }
 
     fun selectGroup(id: String) {
         if (_selectedGroupId.value != id) stopPreview()

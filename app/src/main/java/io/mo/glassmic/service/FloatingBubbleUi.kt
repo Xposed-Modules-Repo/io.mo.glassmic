@@ -514,7 +514,7 @@ private fun Ball(
             }
         }
 
-        // 状态指示点：当正在推流时显示高亮绿点（或者没有时长时显示状态点）
+        // 状态指示点：当正在推流时显示红色录制点（或者没有时长时显示状态点）
         if (isStreaming || durationMs <= 0) {
             Box(
                 modifier = Modifier
@@ -522,7 +522,7 @@ private fun Ball(
                     .padding(2.dp)
                     .size(sizeDp.value.times(0.18f).dp.coerceAtLeast(7.dp))
                     .clip(CircleShape)
-                    .background(if (isStreaming) OverlayColors.Accent else if (active) OverlayColors.Accent.copy(alpha = 0.6f) else OverlayColors.Idle)
+                    .background(if (isStreaming) OverlayColors.Live else if (active) OverlayColors.Accent else OverlayColors.Idle)
                     .border(BorderStroke(1.dp, Color.Black.copy(alpha = 0.4f)), CircleShape)
             )
         }
@@ -570,13 +570,13 @@ private fun MiniBar(
                             modifier = Modifier
                                 .size(6.dp)
                                 .clip(CircleShape)
-                                .background(if (isStreaming) OverlayColors.Accent else OverlayColors.Idle)
+                                .background(if (isStreaming) OverlayColors.Live else OverlayColors.Idle)
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
                             text = if (isStreaming) stringResource(R.string.float_streaming_live)
                                    else stringResource(R.string.float_streaming_idle),
-                            color = if (isStreaming) OverlayColors.Accent else OverlayColors.OnDarkDim,
+                            color = if (isStreaming) OverlayColors.Live else OverlayColors.OnDarkDim,
                             fontSize = 10.sp
                         )
                     }
@@ -619,7 +619,7 @@ private fun MiniBar(
             )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(formatMs(positionMs), color = OverlayColors.OnDarkDim, fontSize = 11.sp)
-                PlaybackPolicyChip(playbackPolicy, onSetPlaybackPolicy)
+                PlaybackPolicyMenuChip(playbackPolicy, onSetPlaybackPolicy)
                 Text(
                     stringResource(R.string.float_collapse),
                     color = OverlayColors.OnDarkDim,
@@ -632,8 +632,24 @@ private fun MiniBar(
     }
 }
 
+/** 播放策略三段切换（设计稿：单次 · 静音 / 循环 / 单次 · 真麦）。 */
 @Composable
 private fun PlaybackPolicyChip(policy: PlaybackPolicy, onSelect: (PlaybackPolicy) -> Unit) {
+    val choices = listOf(
+        PlaybackPolicy.SILENCE to stringResource(R.string.float_policy_once),
+        PlaybackPolicy.LOOP to stringResource(R.string.float_policy_loop),
+        PlaybackPolicy.REAL_MIC to stringResource(R.string.float_policy_real)
+    )
+    SegmentedSwitch(
+        options = choices.map { it.second },
+        selectedIndex = choices.indexOfFirst { it.first == policy }.coerceAtLeast(0),
+        onSelect = { onSelect(choices[it].first) }
+    )
+}
+
+/** 迷你播放条空间有限，策略用下拉小胶囊。 */
+@Composable
+private fun PlaybackPolicyMenuChip(policy: PlaybackPolicy, onSelect: (PlaybackPolicy) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val choices = listOf(
         PlaybackPolicy.SILENCE to stringResource(R.string.float_policy_once),
@@ -643,10 +659,10 @@ private fun PlaybackPolicyChip(policy: PlaybackPolicy, onSelect: (PlaybackPolicy
     Box {
         Text(
             text = choices.firstOrNull { it.first == policy }?.second ?: choices.first().second,
-            color = OverlayColors.Accent,
+            color = OverlayColors.AccentInk,
             fontSize = 11.sp,
-            modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                .background(OverlayColors.FillStrong)
+            modifier = Modifier.clip(RoundedCornerShape(OverlayShapes.Chip))
+                .background(OverlayColors.Fill)
                 .clickable { expanded = true }
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         )
@@ -668,11 +684,11 @@ private fun IconChip(icon: androidx.compose.ui.graphics.vector.ImageVector, desc
         contentDescription = desc,
         tint = OverlayColors.OnDark,
         modifier = Modifier
-            .size(30.dp)
+            .size(34.dp)
             .clip(CircleShape)
-            .background(OverlayColors.FillStrong)
+            .background(OverlayColors.Fill)
             .clickable(onClick = onClick)
-            .padding(6.dp)
+            .padding(8.dp)
     )
 }
 
@@ -822,7 +838,7 @@ private fun GroupRow(group: FloatGroupItem, onClick: () -> Unit) {
     }
 }
 
-/** 片段行：当前播放项除了绿色 ✓，整行还铺一层淡绿底，扫一眼就能定位。 */
+/** 片段行：当前播放项除了主色 ✓，整行还铺一层主色淡底，扫一眼就能定位。 */
 @Composable
 private fun ClipRow(clip: FloatClipItem, onClick: () -> Unit) {
     Row(
@@ -838,7 +854,7 @@ private fun ClipRow(clip: FloatClipItem, onClick: () -> Unit) {
             Icon(
                 Icons.Filled.Check,
                 stringResource(R.string.float_current),
-                tint = OverlayColors.Accent,
+                tint = OverlayColors.AccentInk,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
@@ -925,13 +941,13 @@ private fun TtsTab(
             modifier = Modifier
                 .size(6.dp)
                 .clip(CircleShape)
-                .background(if (isStreaming) OverlayColors.Accent else OverlayColors.Idle)
+                .background(if (isStreaming) OverlayColors.Live else OverlayColors.Idle)
         )
         Spacer(Modifier.width(4.dp))
         Text(
             text = if (isStreaming) stringResource(R.string.float_streaming_live)
                    else stringResource(R.string.float_streaming_idle),
-            color = if (isStreaming) OverlayColors.Accent else OverlayColors.OnDarkDim,
+            color = if (isStreaming) OverlayColors.Live else OverlayColors.OnDarkDim,
             fontSize = 11.sp,
             modifier = Modifier.weight(1f)
         )
@@ -948,7 +964,7 @@ private fun TtsTab(
             Spacer(Modifier.width(4.dp))
             Text(
                 stringResource(R.string.float_audio_monitor),
-                color = if (audioMonitorEnabled) OverlayColors.Accent else OverlayColors.OnDarkDim,
+                color = if (audioMonitorEnabled) OverlayColors.AccentInk else OverlayColors.OnDarkDim,
                 fontSize = 11.sp
             )
         }
@@ -1126,8 +1142,8 @@ private fun DelayChip(
 ) {
     Text(
         text = label,
-        color = if (selected) Color.Black else OverlayColors.OnDark,
-        fontSize = 11.sp,
+        color = if (selected) Color.White else OverlayColors.OnDark,
+        fontSize = 12.sp,
         maxLines = 1,
         textAlign = TextAlign.Center,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
