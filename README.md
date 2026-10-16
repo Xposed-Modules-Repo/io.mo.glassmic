@@ -1,4 +1,4 @@
-# GlassMic
+## GlassMic
 
 [简体中文](https://github.com/lm060719/io.mo.glassmic/blob/main/README_zh.md)
 
